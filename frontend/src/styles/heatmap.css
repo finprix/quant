@@ -1,0 +1,75 @@
+/* QUANT VECTOR — heatmap surfaces */
+
+.heat-grid {
+  display: grid;
+  gap: 2px;
+}
+
+.heat-corner,
+.heat-ylabel {
+  font-family: var(--font-display);
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--muted);
+  display: flex;
+  align-items: center;
+  padding-right: 10px;
+  white-space: nowrap;
+  overflow: hidden;
+}
+
+.heat-xlabel {
+  font-family: var(--font-mono);
+  font-size: 9px;
+  color: var(--muted-2);
+  text-align: center;
+  white-space: nowrap;
+  overflow: hidden;
+}
+
+.heat-cell {
+  height: 26px;
+  border-radius: 1px;
+  cursor: default;
+  transition:
+    outline-color 120ms ease,
+    transform 120ms ease;
+  outline: 1px solid transparent;
+  position: relative;
+}
+
+.heat-cell:hover {
+  outline-color: var(--biscuit);
+  z-index: 2;
+}
+
+.heat-legend {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 10px;
+  justify-content: flex-end;
+}
+
+.heat-legend-bar {
+  width: 140px;
+  height: 8px;
+  border-radius: 2px;
+  border: 1px solid var(--border);
+  background: linear-gradient(
+    90deg,
+    #47121b 0%,
+    #701626 25%,
+    #1b1716 50%,
+    #2e3a2c 75%,
+    #5f7d5a 100%
+  );
+}
+
+.heat-legend-label {
+  font-family: var(--font-mono);
+  font-size: 9px;
+  color: var(--muted-2);
+}

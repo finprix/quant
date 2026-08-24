@@ -1,0 +1,72 @@
+/* QUANT VECTOR — design tokens
+ * Burgundy research-terminal palette. Single source of truth for color,
+ * typography and spacing. Do not hardcode hex values in components.
+ */
+
+:root {
+  /* Backgrounds */
+  --bg-0: #08090a;
+  --bg-1: #0b0b0d;
+  --bg-2: #101012;
+
+  /* Panels */
+  --panel: #131215;
+  --panel-2: #171417;
+  --panel-3: #1b1716;
+
+  /* Burgundy ramp */
+  --burgundy-900: #5a0f1c;
+  --burgundy-700: #701626;
+  --burgundy-500: #8b1e2d;
+  --burgundy-accent: #a62b3d;
+  --accent: var(--burgundy-accent);
+  --accent-dim: rgba(166, 43, 61, 0.14);
+  --accent-glow: rgba(166, 43, 61, 0.32);
+
+  /* Dark brown */
+  --brown-900: #241b18;
+  --brown-700: #30231d;
+
+  /* Biscuit / warm neutral (secondary series & highlights) */
+  --biscuit: #c8ae8d;
+  --biscuit-bright: #d7c2a5;
+  --biscuit-dim: rgba(200, 174, 141, 0.14);
+
+  /* Text */
+  --text: #e7e1dc;
+  --text-strong: #f2ece6;
+  --muted: #8e8581;
+  --muted-2: #6a625f;
+
+  /* Borders */
+  --border: #292326;
+  --border-strong: #39302d;
+
+  /* Semantic series colors (kept distinct from brand burgundy) */
+  --up: #79a882;
+  --up-border: #3c5c46;
+  --up-dim: rgba(121, 168, 130, 0.12);
+  --down: #c9695c;
+  --down-border: #6b382f;
+  --down-dim: rgba(201, 105, 92, 0.12);
+  --warn: #c8a45c;
+  --warn-border: #6e5a30;
+  --warn-dim: rgba(200, 164, 92, 0.12);
+
+  /* Heatmap diverging ramp (negative → positive) */
+  --heat-neg: #701626;
+  --heat-neg-soft: #47121b;
+  --heat-zero: #1b1716;
+  --heat-pos-soft: #2e3a2c;
+  --heat-pos: #5f7d5a;
+
+  /* Typography */
+  --font-display: "Barlow Condensed", "Arial Narrow", "Segoe UI", sans-serif;
+  --font-ui: "Barlow Condensed", "Segoe UI", "Helvetica Neue", Arial, sans-serif;
+  --font-mono: "IBM Plex Mono", "Cascadia Mono", Consolas, "Courier New", monospace;
+
+  /* Geometry */
+  --radius: 3px;
+  --nav-h: 48px;
+  --ctx-h: 36px;
+}
