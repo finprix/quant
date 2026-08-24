@@ -68,7 +68,7 @@ async def lifespan(_):
     yield
 
 
-app = FastAPI(title="QUANT VECTOR API", version="0.15.0", lifespan=lifespan)
+app = FastAPI(title="QUANT VECTOR API", version="0.16.0", lifespan=lifespan)
 
 _ALLOWED_ORIGINS = [
     origin.strip()
@@ -1018,11 +1018,7 @@ def market_overview():
 
 @app.get("/market/quote/{symbol}")
 def market_quote(symbol: str):
-    """Near-real-time quote for one symbol (60 s TTL, no persistence).
-
-    Live numbers come straight from the provider into Python — the
-    database is not involved in this path.
-    """
+    """Near-real-time quote for one symbol (60 s TTL, no persistence)."""
     try:
         return market_ingest.get_live_quote(symbol)
     except InvalidSymbol as exc:
@@ -1035,6 +1031,52 @@ def market_quote(symbol: str):
             detail="Live market data temporarily unavailable. "
                    "Showing most recently cached data is advised.",
         )
+
+
+@app.get("/watchlist")
+def watchlist_list():
+    """Tracked symbols merged with their latest live quotes."""
+    try:
+        rows = market_ingest.get_watchlist_quotes()
+    except database.DatabaseError as exc:
+        raise HTTPException(status_code=503, detail=str(exc))
+    quotes = [r for r in rows if r["quote"]]
+    movers = sorted(
+        (r for r in quotes if r["quote"].get("change_percent") is not None),
+        key=lambda r: abs(r["quote"]["change_percent"]),
+        reverse=True,
+    )
+    return {
+        "symbols": rows,
+        "gainers": [r for r in movers if r["quote"]["change_percent"] > 0][:5],
+        "losers": [r for r in movers if r["quote"]["change_percent"] < 0][:5],
+    }
+
+
+@app.post("/watchlist", dependencies=[Depends(require_developer)])
+def watchlist_add(payload: dict = Body(...)):
+    """Start tracking a symbol (developer action; idempotent)."""
+    symbol = str((payload or {}).get("symbol") or "").strip().upper()
+    if not symbol or len(symbol) > 24:
+        raise HTTPException(status_code=422, detail="'symbol' is required (max 24 chars).")
+    note = payload.get("note")
+    try:
+        entry = database.add_watchlist_symbol(symbol, note)
+    except database.DatabaseError as exc:
+        raise HTTPException(status_code=503, detail=str(exc))
+    return {"added": True, "entry": entry}
+
+
+@app.delete("/watchlist/{symbol}", dependencies=[Depends(require_developer)])
+def watchlist_remove(symbol: str):
+    """Stop tracking a symbol (developer action)."""
+    try:
+        removed = database.remove_watchlist_symbol(symbol)
+    except database.DatabaseError as exc:
+        raise HTTPException(status_code=503, detail=str(exc))
+    if not removed:
+        raise HTTPException(status_code=404, detail=f"'{symbol.upper()}' is not tracked.")
+    return {"removed": True}
 
 
 # ---------------------------------------------------------------------------

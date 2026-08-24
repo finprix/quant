@@ -1144,3 +1144,56 @@ def get_ingestion_job(job_id):
         "result": json.loads(row["result_json"]) if row["result_json"] else None,
         "error": row["error"],
     }
+
+
+# ---------------------------------------------------------------------------
+# Watchlist (tracked symbols)
+# ---------------------------------------------------------------------------
+
+
+def list_watchlist():
+    """Tracked symbols, oldest additions first."""
+    with get_cursor(dictionary=True) as cursor:
+        cursor.execute(
+            "SELECT id, symbol, note, added_at FROM watchlist_symbols "
+            "ORDER BY added_at, id"
+        )
+        return [
+            {
+                "id": int(row["id"]),
+                "symbol": row["symbol"],
+                "note": row["note"],
+                "added_at": _to_json_value(row["added_at"]),
+            }
+            for row in cursor.fetchall()
+        ]
+
+
+def add_watchlist_symbol(symbol, note=None):
+    """Track one symbol (idempotent). Returns the stored row."""
+    clean = str(symbol).upper().strip()
+    with get_cursor() as cursor:
+        cursor.execute(
+            """
+            INSERT INTO watchlist_symbols (symbol, note)
+            VALUES (%s, %s)
+            ON CONFLICT(symbol) DO UPDATE SET
+                note = COALESCE(excluded.note, watchlist_symbols.note)
+            """,
+            (clean, note),
+        )
+    for entry in list_watchlist():
+        if entry["symbol"] == clean:
+            return entry
+    raise DatabaseError(f"Watchlist insert failed for '{clean}'.")
+
+
+def remove_watchlist_symbol(symbol):
+    """Stop tracking one symbol; True when a row was removed."""
+    clean = str(symbol).upper().strip()
+    with get_cursor() as cursor:
+        cursor.execute(
+            "DELETE FROM watchlist_symbols WHERE symbol = %s RETURNING id",
+            (clean,),
+        )
+        return len(cursor.returned_rows) > 0

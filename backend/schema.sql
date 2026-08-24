@@ -163,3 +163,11 @@ CREATE TABLE IF NOT EXISTS ingestion_jobs (
     updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
     CONSTRAINT uq_ingestion_jobs_job_id UNIQUE (job_id)
 );
+
+CREATE TABLE IF NOT EXISTS watchlist_symbols (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    symbol TEXT NOT NULL,
+    note TEXT,
+    added_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    CONSTRAINT uq_watchlist_symbol UNIQUE (symbol)
+);

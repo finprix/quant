@@ -6,6 +6,7 @@ import {
   useMemo,
   useState,
 } from "react";
+import { useSearchParams } from "react-router-dom";
 import { getDatasets, ApiError } from "../api/client.js";
 
 const STORAGE_KEY = "market-dna.active-dataset-id";
@@ -45,6 +46,18 @@ export function DatasetProvider({ children }) {
   useEffect(() => {
     refreshDatasets();
   }, [refreshDatasets]);
+
+  // Deep link: /fingerprint?dataset=123 selects that dataset once the
+  // library has loaded (used by the Markets page and shareable links).
+  const [searchParams] = useSearchParams();
+  useEffect(() => {
+    const requested = Number(searchParams.get("dataset"));
+    if (!Number.isFinite(requested) || requested <= 0) return;
+    if (datasetsLoading || datasetsError) return;
+    if (datasets.some((d) => d.id === requested)) {
+      setActiveIdState((prev) => (prev === requested ? prev : requested));
+    }
+  }, [searchParams, datasets, datasetsLoading, datasetsError]);
 
   useEffect(() => {
     if (activeId === null) {

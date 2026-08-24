@@ -11,6 +11,7 @@ import {
 } from "recharts";
 import { SectionPanel } from "../components/ui/Ui.jsx";
 import { formatNumber, formatPrice } from "../lib/format.js";
+import CandleChart from "./CandleChart.jsx";
 
 function sma(values, window) {
   const out = new Array(values.length).fill(null);
@@ -80,6 +81,7 @@ export default function PriceChart({ prices }) {
   const [secondary, setSecondary] = useState("volume");
   const [showMa20, setShowMa20] = useState(true);
   const [showMa50, setShowMa50] = useState(true);
+  const [style, setStyle] = useState("line"); // "line" | "candles"
 
   const data = useMemo(() => {
     if (!Array.isArray(prices) || prices.length === 0) return [];
@@ -99,6 +101,9 @@ export default function PriceChart({ prices }) {
     return prices.map((row, i) => ({
       date: row.date?.slice(0, 10),
       close: row.close,
+      open: row.open,
+      high: row.high,
+      low: row.low,
       volume: row.volume,
       ma20: ma20[i],
       ma50: ma50[i],
@@ -123,39 +128,69 @@ export default function PriceChart({ prices }) {
       subtitle={`Close with MA20${hasMa50 ? "/MA50" : ""} · ${data.length} sessions`}
       actions={
         <>
-          <label className="control">
-            <input
-              type="checkbox"
-              checked={showMa20}
-              onChange={(event) => setShowMa20(event.target.checked)}
-            />
-            <span>MA20</span>
-          </label>
-          {hasMa50 ? (
-            <label className="control">
-              <input
-                type="checkbox"
-                checked={showMa50}
-                onChange={(event) => setShowMa50(event.target.checked)}
-              />
-              <span>MA50</span>
-            </label>
-          ) : null}
-          <div className="control-row" role="group" aria-label="Secondary series">
-            {SECONDARY_VIEWS.map((view) => (
-              <button
-                key={view.key}
-                type="button"
-                className={`btn${secondary === view.key ? " is-active" : ""}`}
-                onClick={() => setSecondary(view.key)}
-              >
-                {view.label}
-              </button>
-            ))}
+          <div className="control-row" role="group" aria-label="Chart style">
+            {[{ key: "line", label: "Line" }, { key: "candles", label: "Candles" }].map(
+              (option) => (
+                <button
+                  key={option.key}
+                  type="button"
+                  className={`btn${style === option.key ? " is-active" : ""}`}
+                  onClick={() => setStyle(option.key)}
+                >
+                  {option.label}
+                </button>
+              ),
+            )}
           </div>
+          {style === "line" ? (
+            <>
+              <label className="control">
+                <input
+                  type="checkbox"
+                  checked={showMa20}
+                  onChange={(event) => setShowMa20(event.target.checked)}
+                />
+                <span>MA20</span>
+              </label>
+              {hasMa50 ? (
+                <label className="control">
+                  <input
+                    type="checkbox"
+                    checked={showMa50}
+                    onChange={(event) => setShowMa50(event.target.checked)}
+                  />
+                  <span>MA50</span>
+                </label>
+              ) : null}
+            </>
+          ) : null}
+          {style === "line" ? (
+            <div className="control-row" role="group" aria-label="Secondary series">
+              {SECONDARY_VIEWS.map((view) => (
+                <button
+                  key={view.key}
+                  type="button"
+                  className={`btn${secondary === view.key ? " is-active" : ""}`}
+                  onClick={() => setSecondary(view.key)}
+                >
+                  {view.label}
+                </button>
+              ))}
+            </div>
+          ) : null}
         </>
       }
     >
+      {style === "candles" ? (
+        <>
+          <CandleChart prices={prices} height={380} />
+          <p className="fineprint">
+            Green = session closed up · red = closed down. Wicks span the
+            session low\u2013high; older sessions are thinned beyond 180 candles.
+          </p>
+        </>
+      ) : (
+        <>
       <ResponsiveContainer width="100%" height={380}>
         <ComposedChart data={data} syncId="market-dna-price" margin={{ top: 6, right: 8, bottom: 0, left: 0 }}>
           <CartesianGrid stroke="#1e2632" strokeDasharray="2 4" vertical={false} />
@@ -264,6 +299,8 @@ export default function PriceChart({ prices }) {
           </ComposedChart>
         </ResponsiveContainer>
       ) : null}
+        </>
+      )}
     </SectionPanel>
   );
 }

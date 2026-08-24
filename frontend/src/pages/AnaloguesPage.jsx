@@ -16,15 +16,88 @@ import {
   XAxis,
   YAxis,
   CartesianGrid,
+  ResponsiveContainer,
+  Tooltip,
+  ReferenceLine,
 } from "recharts";
 import { DnaChart, AXIS_STYLE, TooltipBox, CHART_COLORS } from "../components/charts/primitives.jsx";
 import { formatSignedPercent, formatPercent } from "../lib/format.js";
 
 const LOOKBACKS = [30, 45, 60, 90];
+const FORWARD_HORIZON = 20;
 
 function toneCell(value) {
   if (value == null) return "";
   return value >= 0 ? "num-pos" : "num-neg";
+}
+
+function ForwardPathTooltip({ active, payload, label }) {
+  if (!active || !payload || payload.length === 0) return null;
+  return (
+    <div className="chart-tooltip">
+      <p style={{ margin: "0 0 4px" }} className="mono">T+{label}</p>
+      <p style={{ margin: 0 }} className="mono">
+        <span style={{ color: "#cfa452" }}>Median: </span>
+        {(payload.find((e) => e.dataKey === "median")?.value * 100 ?? 0).toFixed(2)}%
+      </p>
+      <p style={{ margin: 0 }} className="fineprint">
+        {payload.filter((e) => e.dataKey !== "median").length} paths
+      </p>
+    </div>
+  );
+}
+
+/**
+ * Normalized forward paths for the top analogues: % change over the
+ * FORWARD_HORIZON sessions following each analogue end date, plus a
+ * session-wise median. Pure frontend computation over stored prices.
+ */
+function buildForwardPaths(rows, matches, horizon = FORWARD_HORIZON) {
+  if (!Array.isArray(rows) || rows.length === 0 || matches.length === 0) {
+    return null;
+  }
+  const indexByDate = new Map(
+    rows.map((r, i) => [String(r.date).slice(0, 10), i]),
+  );
+  const series = [];
+  let usable = 0;
+  for (const match of matches.slice(0, 8)) {
+    const endIdx = indexByDate.get(String(match.end_date).slice(0, 10));
+    if (endIdx == null || endIdx + 1 >= rows.length) continue;
+    const base = rows[endIdx].close;
+    if (!(base > 0)) continue;
+    const path = [];
+    for (let j = 1; j <= horizon; j += 1) {
+      const idx = endIdx + j;
+      path.push(idx < rows.length ? rows[idx].close / base - 1 : null);
+    }
+    series.push(path);
+    usable += 1;
+  }
+  if (usable === 0) return null;
+
+  const data = [];
+  const keys = series.map((_, i) => `p${i}`);
+  for (let j = 0; j < horizon; j += 1) {
+    const point = { t: j + 1 };
+    const vals = [];
+    keys.forEach((key, i) => {
+      const v = series[i][j];
+      point[key] = v == null ? null : Number((v * 100).toFixed(3));
+      if (v != null) vals.push(v);
+    });
+    if (vals.length) {
+      vals.sort((a, b) => a - b);
+      const mid = Math.floor(vals.length / 2);
+      point.median = Number(
+        ((vals.length % 2 ? vals[mid] : (vals[mid - 1] + vals[mid]) / 2) * 100).toFixed(3),
+      );
+    } else {
+      point.median = null;
+    }
+    data.push(point);
+  }
+  return { data, keys };
 }
 
 /** Normalized overlay: current window vs analogue window (+forward tail), rebased to 100 at day 0. */
@@ -77,6 +150,12 @@ export default function AnaloguesPage() {
     if (!rows || !selected) return [];
     return buildOverlay(rows, selected, lookback);
   }, [pricesQuery.data, selected, lookback]);
+
+  const forwardPaths = useMemo(() => {
+    const rows = pricesQuery.data?.prices;
+    if (!rows || matches.length === 0) return null;
+    return buildForwardPaths(rows, matches);
+  }, [pricesQuery.data, matches]);
 
   if (!activeId) {
     return (
@@ -173,6 +252,57 @@ export default function AnaloguesPage() {
               },
             ]}
           />
+
+          {forwardPaths ? (
+            <TerminalPanel
+              title="FORWARD PATHS AFTER ANALOGUES"
+              subtitle="Normalized to 0% at each analogue end date · median in gold"
+            >
+              <ResponsiveContainer width="100%" height={300}>
+                <LineChart data={forwardPaths.data} margin={{ top: 6, right: 12, bottom: 0, left: 0 }}>
+                  <CartesianGrid stroke="#1e2632" strokeDasharray="2 4" vertical={false} />
+                  <XAxis
+                    dataKey="t"
+                    stroke="#3a4a5f"
+                    tick={{ fill: "#6b7a8d", fontSize: 11, fontFamily: "Consolas, monospace" }}
+                    tickFormatter={(t) => `T+${t}`}
+                  />
+                  <YAxis
+                    stroke="#3a4a5f"
+                    tick={{ fill: "#6b7a8d", fontSize: 11, fontFamily: "Consolas, monospace" }}
+                    width={64}
+                    tickFormatter={(v) => `${(v * 100).toFixed(0)}%`}
+                  />
+                  <Tooltip content={<ForwardPathTooltip />} />
+                  <ReferenceLine y={0} stroke="#3a4a5f" />
+                  {forwardPaths.keys.map((key, i) => (
+                    <Line
+                      key={key}
+                      dataKey={key}
+                      name={`#${i + 1}`}
+                      stroke="#44546a"
+                      strokeWidth={1}
+                      dot={false}
+                      isAnimationActive={false}
+                    />
+                  ))}
+                  <Line
+                    dataKey="median"
+                    name="Median path"
+                    stroke="#cfa452"
+                    strokeWidth={2.4}
+                    dot={false}
+                    isAnimationActive={false}
+                  />
+                </LineChart>
+              </ResponsiveContainer>
+              <p className="fineprint">
+                Each grey line tracks the market over the {FORWARD_HORIZON} sessions
+                following a historical analogue. The gold line is the session-wise
+                median. Dispersion between grey lines is the uncertainty.
+              </p>
+            </TerminalPanel>
+          ) : null}
 
           <TerminalPanel title="Analogue Matches" subtitle="Ranked by statistical distance to the current window" flush>
             <div style={{ overflowX: "auto" }}>

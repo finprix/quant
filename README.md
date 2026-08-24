@@ -256,6 +256,7 @@ Date,Open,High,Low,Close,Volume
 | Presets | `POST/GET /comparison-presets`, `GET/PUT/DELETE /comparison-presets/{id}` |
 | AI (optional) | `GET /ai/status`, `POST /ai/query` |
 | Auth (v0.12.0) | `POST /auth/login`, `POST /auth/logout`, `GET /auth/session` — HTTP-only signed session cookie, backend-verified developer credentials |
+| Watchlist (v0.16.0) | \GET /watchlist\ (quotes merged), \POST /watchlist\ 🔒, \DELETE /watchlist/{symbol}\ 🔒 — tracked symbols persisted in libSQL |
 | Market data | `GET /market/search?q=&provider=`, `POST /market/import` 🔒, `GET /market/import/status/{job_id}`, `POST /market/update/{dataset_id}` 🔒, `GET /market/overview` |
 | Database inspector (read-only) | `GET /database/status`, `GET /database/stats`, `GET /database/tables`, `GET /database/tables/{table}`, `GET /database/tables/{table}/schema`, `GET /database/datasets/{id}/storage`, `POST /database/integrity` 🔒 |
 | SQL console (v0.12.1, developer) | `POST /database/query` 🔒 — one validated read-only statement per call (`SELECT`/`WITH`/`SHOW`/`DESCRIBE`/`EXPLAIN`); session is `READ ONLY` server-side, mutations rejected 422, max 500 rows |

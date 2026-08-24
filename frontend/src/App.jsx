@@ -10,6 +10,7 @@ import { useAuth } from "./context/AuthContext.jsx";
 // Core pages (small, needed on first paint)
 import Overview from "./pages/Overview.jsx";
 import Datasets from "./pages/Datasets.jsx";
+import MarketsPage from "./pages/MarketsPage.jsx";
 
 // Heavier analytical pages load on demand
 const FingerprintPage = lazy(() => import("./pages/FingerprintPage.jsx"));
@@ -48,6 +49,7 @@ export default function App() {
           <Suspense fallback={<LoadingState label="LOADING VIEW" />}>
             <Routes>
               <Route path="/" element={<Overview />} />
+              <Route path="/markets" element={<MarketsPage />} />
               <Route path="/datasets" element={<Datasets />} />
               <Route path="/fingerprint" element={<FingerprintPage />} />
               <Route path="/analogues" element={<AnaloguesPage />} />

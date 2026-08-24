@@ -1,9 +1,12 @@
+import { useEffect, useState } from "react";
 import { NavLink } from "react-router-dom";
 import { APP_VERSION } from "../../lib/version.js";
 import { useAuth } from "../../context/AuthContext.jsx";
+import { getWatchlist } from "../../api/watchlist.js";
 
 const NAV_ITEMS = [
   { to: "/", label: "Overview", end: true },
+  { to: "/markets", label: "Markets" },
   { to: "/datasets", label: "Datasets" },
   { to: "/fingerprint", label: "Fingerprint" },
   { to: "/analogues", label: "Analogues" },
@@ -15,6 +18,49 @@ const NAV_ITEMS = [
   { to: "/report", label: "Report" },
   { to: "/database", label: "Database" },
 ];
+
+function TickerStrip() {
+  const [ticks, setTicks] = useState(null);
+  useEffect(() => {
+    let alive = true;
+    const load = () =>
+      getWatchlist()
+        .then((payload) => {
+          if (!alive) return;
+          setTicks(
+            (payload.symbols || [])
+              .filter((r) => r.quote)
+              .map((r) => ({
+                symbol: r.symbol,
+                price: r.quote.price,
+                pct: r.quote.change_percent,
+              })),
+          );
+        })
+        .catch(() => {});
+    load();
+    const timer = setInterval(load, 60_000);
+    return () => {
+      alive = false;
+      clearInterval(timer);
+    };
+  }, []);
+  if (!ticks || ticks.length === 0) return null;
+  return (
+    <div className="ticker-strip mono" aria-label="Watchlist quotes">
+      {ticks.map((t) => (
+        <span key={t.symbol} className="tick">
+          <span className="tick-symbol">{t.symbol}</span>{" "}
+          <span className="tick-price">{t.price}</span>{" "}
+          <span className={`tick-pct ${t.pct >= 0 ? "pos" : "neg"}`}>
+            {t.pct >= 0 ? "+" : ""}
+            {t.pct}%
+          </span>
+        </span>
+      ))}
+    </div>
+  );
+}
 
 export default function TopNav() {
   const { isDeveloper, logout } = useAuth();
@@ -48,6 +94,7 @@ export default function TopNav() {
       >
         {isDeveloper ? "LOG OUT" : "EXIT SESSION"}
       </button>
+      <TickerStrip />
     </header>
   );
 }

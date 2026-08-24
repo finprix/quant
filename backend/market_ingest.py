@@ -578,6 +578,20 @@ def get_live_quote(symbol):
     return {**quote, "cached": False}
 
 
+def get_watchlist_quotes():
+    """Watchlist rows merged with live quotes (per-symbol graceful errors)."""
+    entries = database.list_watchlist()
+    out = []
+    for entry in entries:
+        row = {**entry, "quote": None, "quote_error": None}
+        try:
+            row["quote"] = get_live_quote(entry["symbol"])
+        except Exception as exc:
+            row["quote_error"] = str(exc)[:160]
+        out.append(row)
+    return out
+
+
 def list_market_universe():
     """Lightweight multi-asset summary for overview/AI contexts (Phase M).
 

@@ -2165,3 +2165,67 @@ button.db-constraint.link:hover .mono {
 }
 
 .lock-icon { margin-right: 8px; }
+
+
+/* Markets page + ticker strip (Finprix-inspired terminal additions) */
+.ticker-strip {
+  border-top: 1px solid var(--border);
+  display: flex;
+  gap: 18px;
+  overflow-x: auto;
+  padding: 4px 18px;
+  white-space: nowrap;
+}
+
+.ticker-strip .tick-symbol { color: var(--muted); font-size: 10px; }
+.ticker-strip .tick-price { color: var(--text-strong); font-size: 10px; }
+.ticker-strip .tick-pct.pos { color: var(--up); }
+.ticker-strip .tick-pct.neg { color: var(--down); }
+
+.market-movers-card {
+  background: var(--bg-1);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  flex: 1;
+  min-width: 220px;
+  padding: 12px 14px;
+}
+
+.movers-kicker {
+  font-size: 10px;
+  letter-spacing: 0.14em;
+  margin: 0 0 8px;
+  text-transform: uppercase;
+}
+
+.movers-kicker.up { color: var(--up); }
+.movers-kicker.down { color: var(--down); }
+
+.mover-row {
+  align-items: center;
+  border-bottom: 1px solid var(--border);
+  color: var(--text);
+  display: flex;
+  justify-content: space-between;
+  padding: 5px 0;
+  text-decoration: none;
+}
+
+.mover-row:last-child { border-bottom: none; }
+.mover-symbol { font-size: 11px; }
+.mover-pct { font-size: 11px; font-weight: 600; }
+.mover-pct.pos { color: var(--up); }
+.mover-pct.neg { color: var(--down); }
+
+.watchlist-add-form {
+  display: flex;
+  gap: 8px;
+  padding: 12px 14px 0;
+}
+
+.watchlist-add-form .ai-input { text-transform: uppercase; }
+
+.watch-table td, .watch-table th { white-space: nowrap; }
+.chip-btn.danger { color: var(--down); }
+
+.candle-svg { display: block; }
