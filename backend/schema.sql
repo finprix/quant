@@ -154,3 +154,19 @@ CREATE TABLE IF NOT EXISTS dataset_sources (
         FOREIGN KEY (dataset_id) REFERENCES datasets (id)
         ON DELETE CASCADE
 ) ENGINE = InnoDB;
+
+CREATE TABLE IF NOT EXISTS ingestion_jobs (
+    id BIGINT AUTO_INCREMENT PRIMARY KEY,
+    job_id VARCHAR(32) NOT NULL,
+    symbol VARCHAR(64) NULL,
+    provider VARCHAR(32) NULL,
+    status VARCHAR(32) NOT NULL,
+    stage VARCHAR(32) NOT NULL,
+    observations INT NULL,
+    result_json LONGTEXT NULL,
+    error TEXT NULL,
+    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+        ON UPDATE CURRENT_TIMESTAMP,
+    UNIQUE INDEX uq_ingestion_jobs_job_id (job_id)
+) ENGINE = InnoDB;

@@ -27,13 +27,14 @@ _ENV_DEFAULTS = {
 }
 
 # Hosted-platform friendly aliases. Precedence: MYSQL_* (project standard)
-# -> DB_* -> Railway's MYSQLHOST-style variables -> local defaults.
+# -> DB_* -> Railway-style MYSQLHOST variables -> Vercel Marketplace TiDB
+# (TIDB_*) -> local defaults.
 _ENV_ALIASES = {
-    "MYSQL_HOST": ("DB_HOST", "MYSQLHOST"),
-    "MYSQL_PORT": ("DB_PORT", "MYSQLPORT"),
-    "MYSQL_USER": ("DB_USER", "MYSQLUSER"),
-    "MYSQL_PASSWORD": ("DB_PASSWORD", "MYSQLPASSWORD"),
-    "MYSQL_DATABASE": ("DB_NAME", "MYSQLDATABASE"),
+    "MYSQL_HOST": ("DB_HOST", "MYSQLHOST", "TIDB_HOST"),
+    "MYSQL_PORT": ("DB_PORT", "MYSQLPORT", "TIDB_PORT"),
+    "MYSQL_USER": ("DB_USER", "MYSQLUSER", "TIDB_USER"),
+    "MYSQL_PASSWORD": ("DB_PASSWORD", "MYSQLPASSWORD", "TIDB_PASSWORD"),
+    "MYSQL_DATABASE": ("DB_NAME", "MYSQLDATABASE", "TIDB_DATABASE"),
 }
 
 
@@ -74,10 +75,15 @@ def database_name_is_explicit():
     return bool(_env_value("MYSQL_DATABASE"))
 
 
+def _uses_remote_host(host):
+    """True when the target is clearly not a local development server."""
+    return str(host).lower() not in ("localhost", "127.0.0.1", "::1")
+
+
 def get_config():
     """Return the MySQL connection settings from the environment."""
     _load_env_file()
-    return {
+    config = {
         "host": _env_value("MYSQL_HOST") or _ENV_DEFAULTS["MYSQL_HOST"],
         "port": int(_env_value("MYSQL_PORT") or _ENV_DEFAULTS["MYSQL_PORT"]),
         "user": _env_value("MYSQL_USER") or _ENV_DEFAULTS["MYSQL_USER"],
@@ -88,6 +94,25 @@ def get_config():
         # keepalives so idle pooled sockets are not dropped silently.
         "pool_reset_session": True,
     }
+
+    # TLS for managed cloud MySQL services (TiDB Cloud Serverless requires
+    # it). Certificate verification stays ON; MYSQL_SSL_VERIFY=false is an
+    # explicit local-testing escape hatch and is never implied by default.
+    tidb_present = any(
+        os.environ.get(name) for name in ("TIDB_HOST", "TIDB_PORT", "TIDB_USER")
+    )
+    remote_or_tidb = _uses_remote_host(config["host"]) or tidb_present
+    ssl_required = os.environ.get("MYSQL_SSL_REQUIRED", "").strip().lower() in (
+        "1", "true", "yes", "on",
+    )
+    verify = os.environ.get("MYSQL_SSL_VERIFY", "").strip().lower()
+    if remote_or_tidb or ssl_required:
+        config["ssl_verify_cert"] = verify not in ("0", "false", "no", "off")
+        config["ssl_verify_identity"] = config["ssl_verify_cert"]
+        ca_path = os.environ.get("MYSQL_SSL_CA", "").strip()
+        if ca_path:
+            config["ssl_ca"] = ca_path
+    return config
 
 
 def create_connection(use_database=True):
@@ -141,7 +166,10 @@ def initialize_schema():
             provisioned.append(statement)
         cleaned = ";".join(provisioned)
 
-    connection = create_connection(use_database=not use_explicit_database)
+    # With an explicitly configured database we select it directly in the
+    # connection; otherwise (local defaults) connect without one and let the
+    # file's CREATE DATABASE / USE statements provision market_dna.
+    connection = create_connection(use_database=use_explicit_database)
     cursor = connection.cursor()
     try:
         for statement in cleaned.split(";"):
@@ -952,3 +980,68 @@ def delete_comparison_preset(preset_id):
     with get_cursor() as cursor:
         cursor.execute("DELETE FROM comparison_presets WHERE id = %s", (preset_id,))
         return cursor.rowcount > 0
+
+
+# ---------------------------------------------------------------------------
+# Ingestion job persistence (serverless-safe status recovery)
+# ---------------------------------------------------------------------------
+
+
+def upsert_ingestion_job(job):
+    """Mirror an ingestion-job snapshot so status polls survive instance
+    changes on serverless platforms. Best-effort by design (caller wraps)."""
+    result_json = json.dumps(job.get("result"), default=str) if job.get("result") is not None else None
+    with get_cursor() as cursor:
+        cursor.execute(
+            """
+            INSERT INTO ingestion_jobs
+                (job_id, symbol, provider, status, stage, observations,
+                 result_json, error)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+            ON DUPLICATE KEY UPDATE
+                symbol = VALUES(symbol),
+                provider = VALUES(provider),
+                status = VALUES(status),
+                stage = VALUES(stage),
+                observations = VALUES(observations),
+                result_json = VALUES(result_json),
+                error = VALUES(error)
+            """,
+            (
+                job["job_id"],
+                job.get("symbol"),
+                job.get("provider"),
+                job["status"],
+                job["stage"],
+                job.get("observations"),
+                result_json,
+                job.get("error"),
+            ),
+        )
+
+
+def get_ingestion_job(job_id):
+    """Return a persisted ingestion-job snapshot, or None."""
+    with get_cursor(dictionary=True) as cursor:
+        cursor.execute(
+            """
+            SELECT job_id, symbol, provider, status, stage, observations,
+                   result_json, error
+            FROM ingestion_jobs
+            WHERE job_id = %s
+            """,
+            (job_id,),
+        )
+        row = cursor.fetchone()
+    if not row:
+        return None
+    return {
+        "job_id": row["job_id"],
+        "symbol": row["symbol"],
+        "provider": row["provider"],
+        "status": row["status"],
+        "stage": row["stage"],
+        "observations": int(row["observations"]) if row["observations"] is not None else None,
+        "result": json.loads(row["result_json"]) if row["result_json"] else None,
+        "error": row["error"],
+    }

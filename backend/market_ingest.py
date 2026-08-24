@@ -275,6 +275,20 @@ _JOBS = {}
 _JOBS_LOCK = threading.Lock()
 
 
+def _persist_job(job):
+    """Mirror one job snapshot into MySQL (best effort).
+
+    Serverless platforms may route the status poll to a different instance
+    than the one running the import thread, so job state is persisted to
+    the ingestion_jobs table as well as the in-process registry. A storage
+    failure must never break an ongoing import, hence the broad except.
+    """
+    try:
+        database.upsert_ingestion_job(job)
+    except Exception:
+        pass
+
+
 def create_import_job(payload):
     import uuid
 
@@ -290,10 +304,22 @@ def create_import_job(payload):
             "result": None,
             "error": None,
         }
+        _persist_job(_JOBS[job_id])
     return _JOBS[job_id]
 
 
 def run_import_job(job_id, payload):
+    """BackgroundTask body wrapper: always mirrors the final job state."""
+    try:
+        return _run_import_job(job_id, payload)
+    finally:
+        with _JOBS_LOCK:
+            job = _JOBS.get(job_id)
+        if job is not None:
+            _persist_job(job)
+
+
+def _run_import_job(job_id, payload):
     """BackgroundTask body: drives one import through its stages."""
     with _JOBS_LOCK:
         job = _JOBS.get(job_id)
@@ -305,6 +331,7 @@ def run_import_job(job_id, payload):
             job["stage"] = stage
             job["status"] = stage
             job.update(extra)
+        _persist_job(job)
 
     try:
         advance("FETCHING")
@@ -492,10 +519,15 @@ def run_import_job(job_id, payload):
 def get_import_job(job_id):
     with _JOBS_LOCK:
         job = _JOBS.get(job_id)
-    if job is None:
+    if job is not None:
+        # Return a snapshot without internal locks.
+        return dict(job)
+    # Serverless fallback: this instance may not be the one that ran the
+    # import thread — recover the persisted state from MySQL instead.
+    try:
+        return database.get_ingestion_job(job_id)
+    except Exception:
         return None
-    # Return a snapshot without internal locks.
-    return dict(job)
 
 
 def list_market_universe():
