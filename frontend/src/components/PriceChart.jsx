@@ -51,8 +51,12 @@ const SECONDARY_VIEWS = [
   { key: "volume", label: "Volume" },
   { key: "drawdown", label: "Drawdown" },
   { key: "volatility", label: "Rolling vol" },
+  { key: "momentum", label: "Momentum 20D" },
+  { key: "cumret", label: "Cumulative" },
   { key: "none", label: "None" },
 ];
+
+const PCT_VIEWS = new Set(["drawdown", "volatility", "momentum", "cumret"]);
 
 function TerminalTooltip({ active, payload, label }) {
   if (!active || !payload || payload.length === 0) return null;
@@ -67,7 +71,7 @@ function TerminalTooltip({ active, payload, label }) {
               {entry.name}:{" "}
               {entry.dataKey === "volume"
                 ? formatNumber(entry.value, 0)
-                : entry.dataKey === "drawdown" || entry.dataKey === "rolling_vol"
+                : PCT_VIEWS.has(entry.dataKey)
                   ? `${(entry.value * 100).toFixed(2)}%`
                   : formatPrice(entry.value)}
             </span>
@@ -97,6 +101,14 @@ export default function PriceChart({ prices }) {
       20,
     );
     const drawdowns = drawdownSeries(closes);
+    const momentum20 = closes.map((close, i) => {
+      if (i < 20) return null;
+      const base = closes[i - 20];
+      return base ? close / base - 1 : null;
+    });
+    const cumret = closes.map((close, i) =>
+      i === 0 || !closes[0] ? null : close / closes[0] - 1,
+    );
 
     return prices.map((row, i) => ({
       date: row.date?.slice(0, 10),
@@ -109,6 +121,8 @@ export default function PriceChart({ prices }) {
       ma50: ma50[i],
       drawdown: drawdowns[i],
       rolling_vol: i >= 20 ? rollingVol[i - 20] : null,
+      momentum: momentum20[i],
+      cumret: cumret[i],
     }));
   }, [prices]);
 
@@ -259,7 +273,7 @@ export default function PriceChart({ prices }) {
               tick={{ fill: "#6b7a8d", fontSize: 10, fontFamily: "Consolas, monospace" }}
               width={64}
               domain={
-                secondary === "drawdown"
+                PCT_VIEWS.has(secondary)
                   ? [-1, 0]
                   : ["auto", "auto"]
               }
@@ -290,6 +304,30 @@ export default function PriceChart({ prices }) {
                 dataKey="rolling_vol"
                 name="Rolling vol (20d ann.)"
                 stroke="#56b8a5"
+                strokeWidth={1.2}
+                dot={false}
+                connectNulls
+                isAnimationActive={false}
+              />
+            ) : null}
+            {secondary === "momentum" ? (
+              <Line
+                type="linear"
+                dataKey="momentum"
+                name="Momentum 20D"
+                stroke="#cfa452"
+                strokeWidth={1.2}
+                dot={false}
+                connectNulls
+                isAnimationActive={false}
+              />
+            ) : null}
+            {secondary === "cumret" ? (
+              <Line
+                type="linear"
+                dataKey="cumret"
+                name="Cumulative return"
+                stroke="#7f9cc4"
                 strokeWidth={1.2}
                 dot={false}
                 connectNulls

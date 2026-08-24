@@ -120,7 +120,8 @@ describe("Guest mode", () => {
     await user.click(await screen.findByText(/CONTINUE AS GUEST/i));
     expect(await screen.findByText(/GUEST ACCESS/i)).toBeTruthy();
 
-    await user.click(screen.getByRole("link", { name: "Datasets" }));
+    await user.click(screen.getByRole("button", { name: /Data ▾/i }));
+    await user.click(await screen.findByText("Datasets"));
     expect(await screen.findByText(/RESEARCH MODE — READ ONLY/i)).toBeTruthy();
     expect(screen.queryByRole("button", { name: /upload csv/i })).toBeNull();
     expect(screen.queryByRole("button", { name: /fetch market data/i })).toBeNull();
@@ -150,7 +151,8 @@ describe("Developer mode", () => {
     expect(await screen.findAllByText(/DEVELOPER/i)).toBeTruthy();
     expect(screen.getByText(/LOG OUT/i)).toBeTruthy();
 
-    await user.click(screen.getByRole("link", { name: "Datasets" }));
+    await user.click(screen.getByRole("button", { name: /Data ▾/i }));
+    await user.click(await screen.findByText("Datasets"));
     await screen.findByRole("button", { name: /upload csv/i });
     expect(screen.getByRole("button", { name: /fetch market data/i })).toBeTruthy();
   });

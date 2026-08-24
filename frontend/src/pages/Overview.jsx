@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useDatasets } from "../context/DatasetContext.jsx";
 import { useApiData } from "../hooks/useApiData.js";
 import { SectionHeader, TerminalPanel } from "../components/common/Panels.jsx";
@@ -13,6 +13,7 @@ import {
 } from "../components/states/States.jsx";
 import { PriceTimeline } from "../components/charts/primitives.jsx";
 import MarketOverviewPanel from "../components/market/MarketOverviewPanel.jsx";
+import OverviewMovers from "../components/market/OverviewMovers.jsx";
 import {
   buildDerivedFrame,
   percentileRank,
@@ -52,6 +53,19 @@ export default function Overview() {
   const regimeQuery = useApiData(regimePath);
   const pricesQuery = useApiData(pricesPath);
 
+  // Centralized auto-refresh: stored-universe metrics stay current without
+  // any component hitting external providers directly.
+  useEffect(() => {
+    if (!activeId) return undefined;
+    const timer = setInterval(() => {
+      detailQuery.refetch();
+      summaryQuery.refetch();
+      regimeQuery.refetch();
+    }, 60_000);
+    return () => clearInterval(timer);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeId]);
+
   const frame = useMemo(() => {
     const rows = pricesQuery.data?.prices;
     if (!rows || rows.length === 0) return null;
@@ -63,6 +77,7 @@ export default function Overview() {
       <div className="page">
         <SectionHeader title="Market Overview" desc="Current statistical state of the selected market." />
         <NoDatasetState />
+        <OverviewMovers />
       </div>
     );
   }
@@ -186,6 +201,8 @@ export default function Overview() {
       />
 
       <MarketOverviewPanel />
+
+      <OverviewMovers />
 
       <MetricStrip items={stripItems} />
 

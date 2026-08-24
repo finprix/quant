@@ -1,23 +1,80 @@
-import { useEffect, useState } from "react";
-import { NavLink } from "react-router-dom";
+import { useEffect, useRef, useState } from "react";
+import { NavLink, useLocation } from "react-router-dom";
 import { APP_VERSION } from "../../lib/version.js";
 import { useAuth } from "../../context/AuthContext.jsx";
 import { getWatchlist } from "../../api/watchlist.js";
+import GlobalSearch from "./GlobalSearch.jsx";
 
-const NAV_ITEMS = [
-  { to: "/", label: "Overview", end: true },
-  { to: "/markets", label: "Markets" },
-  { to: "/datasets", label: "Datasets" },
-  { to: "/fingerprint", label: "Fingerprint" },
-  { to: "/analogues", label: "Analogues" },
-  { to: "/regimes", label: "Regimes" },
-  { to: "/intelligence", label: "Intelligence" },
-  { to: "/heatmaps", label: "Heatmaps" },
-  { to: "/compare", label: "Compare" },
-  { to: "/ai", label: "AI" },
-  { to: "/report", label: "Report" },
-  { to: "/database", label: "Database" },
+// Decluttered: seven top-level entries; related pages grouped in dropdowns.
+const NAV_GROUPS = [
+  { label: "Overview", to: "/", end: true },
+  { label: "Markets", to: "/markets" },
+  {
+    label: "Analysis",
+    children: [
+      { to: "/fingerprint", label: "Fingerprint" },
+      { to: "/analogues", label: "Analogues" },
+      { to: "/regimes", label: "Regimes" },
+      { to: "/intelligence", label: "Intelligence" },
+      { to: "/heatmaps", label: "Heatmaps" },
+    ],
+  },
+  { label: "Compare", to: "/compare" },
+  { label: "AI", to: "/ai" },
+  { label: "Report", to: "/report" },
+  {
+    label: "Data",
+    children: [
+      { to: "/datasets", label: "Datasets" },
+      { to: "/database", label: "Database" },
+    ],
+  },
 ];
+
+function NavGroup({ group }) {
+  const [open, setOpen] = useState(false);
+  const ref = useRef(null);
+  const location = useLocation();
+
+  useEffect(() => setOpen(false), [location]);
+  useEffect(() => {
+    const onDoc = (e) => {
+      if (ref.current && !ref.current.contains(e.target)) setOpen(false);
+    };
+    document.addEventListener("mousedown", onDoc);
+    return () => document.removeEventListener("mousedown", onDoc);
+  }, []);
+
+  const anyActive = group.children.some((c) => location.pathname === c.to);
+
+  return (
+    <div className={`nav-group${anyActive ? " has-active" : ""}`} ref={ref}>
+      <button
+        type="button"
+        className={`nav-pill nav-group-btn${anyActive ? " active" : ""}`}
+        aria-expanded={open}
+        onClick={() => setOpen((v) => !v)}
+      >
+        {group.label} <span className="nav-caret">▾</span>
+      </button>
+      {open ? (
+        <div className="nav-menu">
+          {group.children.map((child) => (
+            <NavLink
+              key={child.to}
+              to={child.to}
+              className={({ isActive }) =>
+                `nav-menu-item${isActive ? " active" : ""}`
+              }
+            >
+              {child.label}
+            </NavLink>
+          ))}
+        </div>
+      ) : null}
+    </div>
+  );
+}
 
 function TickerStrip() {
   const [ticks, setTicks] = useState(null);
@@ -74,17 +131,22 @@ export default function TopNav() {
           {isDeveloper ? "DEVELOPER" : "GUEST ACCESS"}
         </span>
       </div>
+      <GlobalSearch />
       <nav className="topnav-links" aria-label="Primary">
-        {NAV_ITEMS.map((item) => (
-          <NavLink
-            key={item.to}
-            to={item.to}
-            end={item.end}
-            className={({ isActive }) => `nav-pill${isActive ? " active" : ""}`}
-          >
-            {item.label}
-          </NavLink>
-        ))}
+        {NAV_GROUPS.map((group) =>
+          group.children ? (
+            <NavGroup key={group.label} group={group} />
+          ) : (
+            <NavLink
+              key={group.to}
+              to={group.to}
+              end={group.end}
+              className={({ isActive }) => `nav-pill${isActive ? " active" : ""}`}
+            >
+              {group.label}
+            </NavLink>
+          ),
+        )}
       </nav>
       <button
         type="button"

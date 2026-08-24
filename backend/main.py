@@ -68,7 +68,7 @@ async def lifespan(_):
     yield
 
 
-app = FastAPI(title="QUANT VECTOR API", version="0.16.0", lifespan=lifespan)
+app = FastAPI(title="QUANT VECTOR API", version="0.17.0", lifespan=lifespan)
 
 _ALLOWED_ORIGINS = [
     origin.strip()
@@ -1030,6 +1030,23 @@ def market_quote(symbol: str):
             status_code=502,
             detail="Live market data temporarily unavailable. "
                    "Showing most recently cached data is advised.",
+        )
+
+
+@app.get("/market/news/{symbol}")
+def market_news(symbol: str):
+    """Recent public headlines for one symbol (provider-provided only).
+
+    Titles and links are passed through verbatim; nothing is generated.
+    """
+    try:
+        return {"symbol": symbol.upper(), "items": market_ingest.get_symbol_news(symbol)}
+    except InvalidSymbol as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    except Exception:
+        raise HTTPException(
+            status_code=502,
+            detail="Headlines temporarily unavailable.",
         )
 
 

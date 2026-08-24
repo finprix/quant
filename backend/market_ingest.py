@@ -578,6 +578,43 @@ def get_live_quote(symbol):
     return {**quote, "cached": False}
 
 
+def get_symbol_news(symbol, limit=8):
+    """Public headlines for one symbol via the provider (pass-through)."""
+    import yfinance as yf
+
+    key = str(symbol).upper().strip()
+    raw = yf.Ticker(key).news or []
+    items = []
+    for entry in raw[:limit]:
+        content = entry.get("content") or entry
+        link = None
+        if isinstance(content.get("clickThroughUrl"), dict):
+            link = content["clickThroughUrl"].get("url")
+        if not link and isinstance(content.get("canonicalUrl"), dict):
+            link = content["canonicalUrl"].get("url")
+        published = None
+        if content.get("pubDate"):
+            published = str(content["pubDate"])
+        elif content.get("providerPublishTime"):
+            ts = content["providerPublishTime"]
+            published = (
+                _time.strftime("%Y-%m-%dT%H:%M:%SZ", _time.gmtime(ts))
+                if isinstance(ts, (int, float))
+                else str(ts)
+            )
+        items.append(
+            {
+                "title": content.get("title"),
+                "publisher": (content.get("provider") or {}).get("displayName")
+                if isinstance(content.get("provider"), dict)
+                else content.get("publisher"),
+                "link": link,
+                "published": published,
+            }
+        )
+    return [i for i in items if i["title"]]
+
+
 def get_watchlist_quotes():
     """Watchlist rows merged with live quotes (per-symbol graceful errors)."""
     entries = database.list_watchlist()

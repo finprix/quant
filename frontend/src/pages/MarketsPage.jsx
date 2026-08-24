@@ -10,6 +10,10 @@ import { useAuth } from "../context/AuthContext.jsx";
 import { TerminalPanel, SectionHeader } from "../components/common/Panels.jsx";
 import StatusBadge from "../components/common/StatusBadge.jsx";
 import { LoadingState } from "../components/states/States.jsx";
+import MoversCard from "../components/common/MoversCard.jsx";
+import useSymbolImport from "../hooks/useSymbolImport.js";
+import { useNavigate } from "react-router-dom";
+import { request } from "../api/client.js";
 import { formatSignedPercent } from "../lib/format.js";
 
 const REFRESH_MS = 60_000;
@@ -19,36 +23,14 @@ function pctClass(value) {
   return value >= 0 ? "pos" : "neg";
 }
 
-function MoversCard({ title, rows }) {
-  return (
-    <div className="market-movers-card">
-      <p className={`movers-kicker ${title === "TOP GAINERS" ? "up" : "down"}`}>
-        {title}
-      </p>
-      {rows.length === 0 ? (
-        <p className="fineprint">No data yet</p>
-      ) : (
-        rows.map(({ symbol, quote }) => (
-          <Link
-            key={symbol}
-            className="mover-row"
-            to={`/fingerprint?dataset=${quote.dataset_id ?? ""}`}
-            onClick={(e) => !quote.dataset_id && e.preventDefault()}
-            title={quote.dataset_id ? "Open analysis" : "Import to analyse"}
-          >
-            <span className="mono mover-symbol">{symbol}</span>
-            <span className={`mono mover-pct ${pctClass(quote.change_percent)}`}>
-              {formatSignedPercent(quote.change_percent / 100)}
-            </span>
-          </Link>
-        ))
-      )}
-    </div>
-  );
-}
-
 export default function MarketsPage() {
   const { isDeveloper } = useAuth();
+const navigate = useNavigate();
+const [launchingSym, setLaunchingSym] = useState(null);
+const { launch, phase, stage } = useSymbolImport({
+  onComplete: (datasetId) => navigate(`/fingerprint?dataset=${datasetId}`),
+});
+const importing = phase === "importing";
   const { datasets } = useDatasets();
   const [data, setData] = useState(null);
   const [error, setError] = useState(null);
@@ -257,6 +239,21 @@ export default function MarketsPage() {
                           >
                             ANALYZE
                           </Link>
+                        ) : isDeveloper ? (
+                          <button
+                            type="button"
+                            className="chip-btn"
+                            disabled={importing}
+                            onClick={() => {
+                              setLaunchingSym(symbol.toUpperCase());
+                              launch(symbol);
+                            }}
+                            title="Import history and open the quant analysis"
+                          >
+                            {importing && launchingSym === symbol.toUpperCase()
+                              ? stage || "IMPORTING…"
+                              : "IMPORT & ANALYZE"}
+                          </button>
                         ) : null}
                         {isDeveloper ? (
                           <button
@@ -277,6 +274,98 @@ export default function MarketsPage() {
           </div>
         )}
       </TerminalPanel>
+
+      <div className="grid-side">
+        <HeadlinesPanel symbols={(data?.symbols || []).map((s) => s.symbol)} />
+        <TerminalPanel title="ABOUT LIVE DATA" flush>
+          <p className="fineprint" style={{ padding: "12px 14px" }}>
+            Quotes refresh every 60 seconds through a cached provider layer.
+            Headlines are public items passed through from the provider —
+            Quant Vector does not generate news. Historical analysis always
+            uses the stored dataset, never the live tick.
+          </p>
+        </TerminalPanel>
+      </div>
     </div>
+  );
+}
+
+function HeadlinesPanel({ symbols }) {
+  const [symbolIndex, setSymbolIndex] = useState(0);
+  const [items, setItems] = useState(null);
+  const [error, setError] = useState(null);
+
+  const symbol = symbols[symbolIndex];
+
+  useEffect(() => {
+    setItems(null);
+    setError(null);
+    if (!symbol) return undefined;
+    let alive = true;
+    request(`/market/news/${encodeURIComponent(symbol)}`)
+      .then((payload) => alive && setItems(payload.items || []))
+      .catch((err) => alive && setError(err.message || String(err)));
+    return () => {
+      alive = false;
+    };
+  }, [symbol]);
+
+  if (!symbols.length) {
+    return (
+      <TerminalPanel title="HEADLINES" flush>
+        <p className="fineprint" style={{ padding: "12px 14px" }}>
+          Track a symbol to see its recent public headlines.
+        </p>
+      </TerminalPanel>
+    );
+  }
+
+  return (
+    <TerminalPanel
+      title={`HEADLINES — ${symbol}`}
+      flush
+      actions={
+        symbols.length > 1 ? (
+          <button
+            type="button"
+            className="chip-btn"
+            onClick={() =>
+              setSymbolIndex((i) => (i + 1) % Math.max(1, symbols.length))
+            }
+          >
+            NEXT SYMBOL
+          </button>
+        ) : null
+      }
+    >
+      {error ? (
+        <p className="error-text" style={{ padding: "12px 14px" }}>
+          {error}
+        </p>
+      ) : items == null ? (
+        <LoadingState label="LOADING HEADLINES" />
+      ) : items.length === 0 ? (
+        <p className="fineprint" style={{ padding: "12px 14px" }}>
+          No recent headlines.
+        </p>
+      ) : (
+        <div className="news-list">
+          {items.map((item) => (
+            <a
+              key={item.link || item.title}
+              className="news-item"
+              href={item.link || "#"}
+              target="_blank"
+              rel="noreferrer noopener"
+            >
+              <span className="news-title">{item.title}</span>
+              <span className="news-meta mono fineprint">
+                {item.publisher || "provider"} · {item.published ?? ""}
+              </span>
+            </a>
+          ))}
+        </div>
+      )}
+    </TerminalPanel>
   );
 }

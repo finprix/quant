@@ -3,6 +3,9 @@
  * Every failure must be explicit and recoverable — never a blank area.
  */
 
+import { useState } from "react";
+import useSymbolImport from "../../hooks/useSymbolImport.js";
+
 export function LoadingState({ label = "LOADING" }) {
   return (
     <div className="state-block" role="status" aria-live="polite">
@@ -56,11 +59,43 @@ export function EmptyState({ title, hint, action }) {
 }
 
 export function NoDatasetState() {
+  // Dataset-independent by design: offer one-click live analysis instead of
+  // a dead end. Picking from the context bar above still works too.
+  const [symbol, setSymbol] = useState("");
+  const { launch, phase, stage, error } = useSymbolImport();
+  const importing = phase === "importing";
+
+  const submit = (event) => {
+    event.preventDefault();
+    if (symbol.trim()) launch(symbol.trim());
+  };
+
   return (
-    <EmptyState
-      title="NO DATASET SELECTED"
-      hint="Upload a CSV on the Datasets page or pick a dataset in the context bar above to begin analysis."
-    />
+    <div className="state-block">
+      <p className="state-title">NO DATASET SELECTED</p>
+      <p className="state-hint">
+        Pick a dataset in the context bar above — or analyze any supported
+        symbol live right now:
+      </p>
+      <form className="live-launch-form" onSubmit={submit}>
+        <input
+          className="ai-input"
+          value={symbol}
+          placeholder="e.g. AAPL, ^GSPC, BTC-USD"
+          disabled={importing}
+          maxLength={24}
+          onChange={(e) => setSymbol(e.target.value.toUpperCase())}
+        />
+        <button
+          type="submit"
+          className="btn accent small"
+          disabled={importing || !symbol.trim()}
+        >
+          {importing ? stage || "IMPORTING…" : "IMPORT & ANALYZE"}
+        </button>
+      </form>
+      {error ? <p className="error-text">{error}</p> : null}
+    </div>
   );
 }
 

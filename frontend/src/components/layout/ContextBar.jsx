@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { useDatasets } from "../../context/DatasetContext.jsx";
 import { useApiData, invalidateCache } from "../../hooks/useApiData.js";
 import { checkHealth } from "../../api/health.js";
+import { request } from "../../api/client.js";
 
 const HEALTH_POLL_MS = 20_000;
 
@@ -45,6 +46,26 @@ export default function ContextBar() {
     selectDataset(Number(value));
   };
 
+  // Live quote badge for the active dataset's symbol (60 s TTL upstream).
+  const symbolMatch = activeDataset?.filename?.match(/^([A-Z0-9.\-^=]+)_/i);
+  const liveSymbol = symbolMatch ? symbolMatch[1].toUpperCase() : null;
+  const [liveQuote, setLiveQuote] = useState(null);
+  useEffect(() => {
+    setLiveQuote(null);
+    if (!liveSymbol) return undefined;
+    let alive = true;
+    const load = () =>
+      request(`/market/quote/${encodeURIComponent(liveSymbol)}`)
+        .then((q) => alive && setLiveQuote(q))
+        .catch(() => {});
+    load();
+    const timer = setInterval(load, 60_000);
+    return () => {
+      alive = false;
+      clearInterval(timer);
+    };
+  }, [liveSymbol]);
+
   return (
     <div className="ctx-bar" role="status">
       <div className="ctx-item">
@@ -79,6 +100,20 @@ export default function ContextBar() {
             : "—"}
         </span>
       </div>
+      {liveQuote && liveQuote.price != null ? (
+        <div className="ctx-item">
+          <span className="ctx-label">Live · {liveSymbol}</span>
+          <span className="ctx-value mono">
+            {liveQuote.price}{" "}
+            <span
+              className={`tick-pct ${liveQuote.change_percent >= 0 ? "pos" : "neg"}`}
+            >
+              {liveQuote.change_percent >= 0 ? "+" : ""}
+              {liveQuote.change_percent}%
+            </span>
+          </span>
+        </div>
+      ) : null}
       <div className="ctx-item">
         <span className="ctx-label">Rows</span>
         <span className="ctx-value">

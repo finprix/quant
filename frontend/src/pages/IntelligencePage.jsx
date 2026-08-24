@@ -155,6 +155,45 @@ export default function IntelligencePage() {
             Weights adapt: regime weight scales with regime-assignment confidence; analogue
             weight decreases when forward-outcome dispersion is high.
           </p>
+          <div style={{ overflowX: "auto", borderTop: "1px solid var(--border)", marginTop: 10, paddingTop: 8 }}>
+            <table className="dna-table compact">
+              <thead>
+                <tr>
+                  <th>Component</th>
+                  <th style={{ textAlign: "right" }}>Score</th>
+                  <th style={{ textAlign: "right" }}>Weight</th>
+                  <th style={{ textAlign: "right" }}>Contribution</th>
+                </tr>
+              </thead>
+              <tbody>
+                {[
+                  ["TREND", ev.trend_score, weights.trend],
+                  ["ANALOGUES", ev.analogue_score, weights.analogues],
+                  ["REGIME", ev.regime_score, weights.regime],
+                  ["RISK", ev.risk_score, weights.risk],
+                ].map(([label, score, weight]) => {
+                  const has = typeof score === "number" && typeof weight === "number";
+                  return (
+                    <tr key={label}>
+                      <td className="text-cell">{label}</td>
+                      <td style={{ textAlign: "right" }} className="mono">
+                        {has ? score.toFixed(3) : "N/A"}
+                      </td>
+                      <td style={{ textAlign: "right" }} className="mono">
+                        {typeof weight === "number" ? weight.toFixed(2) : "N/A"}
+                      </td>
+                      <td
+                        style={{ textAlign: "right" }}
+                        className={`mono ${has && score * weight >= 0 ? "num-pos" : "num-neg"}`}
+                      >
+                        {has ? formatSignedPercent(score * weight, 1) : "N/A"}
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
         </TerminalPanel>
 
         {/* ANALOGUE EVIDENCE */}

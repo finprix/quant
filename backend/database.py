@@ -402,6 +402,50 @@ def _to_json_value(value):
     return value
 
 
+# ---------------------------------------------------------------------------
+# Hot-read metadata cache
+#
+# Embedded replicas need a native driver that is not available on every
+# deployment target (e.g. Windows/Vercel). This small TTL cache delivers
+# the same practical benefit for registry reads — datasets change rarely
+# and every mutating helper below invalidates it explicitly.
+# ---------------------------------------------------------------------------
+
+_META_CACHE = {}
+_META_CACHE_TTL = max(
+    0.0,
+    float(os.environ.get("LIBSQL_READ_CACHE_SECONDS", "15") or 0),
+)
+
+
+def _cache_get(key):
+    if _META_CACHE_TTL <= 0:
+        return None
+    import time as _time
+
+    entry = _META_CACHE.get(key)
+    if not entry:
+        return None
+    ts, value = entry
+    if _time.monotonic() - ts > _META_CACHE_TTL:
+        _META_CACHE.pop(key, None)
+        return None
+    # Deep-copy cheaply: cached payloads are JSON-shaped plain containers.
+    return json.loads(json.dumps(value))
+
+
+def _cache_set(key, value):
+    if _META_CACHE_TTL <= 0:
+        return
+    import time as _time
+
+    _META_CACHE[key] = (_time.monotonic(), value)
+
+
+def _invalidate_meta():
+    _META_CACHE.clear()
+
+
 def _parse_date(value):
     if value in (None, ""):
         return None
@@ -457,6 +501,7 @@ def store_dataset(filename, start_date, end_date, row_count, latest_close, price
                 cursor.execute(_METRIC_INSERT, (dataset_id, name, value))
 
         connection.commit()
+        _invalidate_meta()
         return dataset_id
     except Exception as exc:
         connection.rollback()
@@ -475,7 +520,10 @@ def store_dataset(filename, start_date, end_date, row_count, latest_close, price
 
 
 def list_datasets():
-    """Return metadata for every stored dataset, newest first."""
+    """Return metadata for every stored dataset, newest first (cached)."""
+    cached = _cache_get(("datasets",))
+    if cached is not None:
+        return cached
     with get_cursor(dictionary=True) as cursor:
         cursor.execute(
             """
@@ -484,14 +532,19 @@ def list_datasets():
             ORDER BY created_at DESC, id DESC
             """
         )
-        return [
+        rows = [
             {key: _to_json_value(value) for key, value in row.items()}
             for row in cursor.fetchall()
         ]
+    _cache_set(("datasets",), rows)
+    return rows
 
 
 def get_dataset(dataset_id):
     """Return one dataset's metadata plus its summary metrics, or None."""
+    cached = _cache_get(("dataset", dataset_id))
+    if cached is not None:
+        return cached
     with get_cursor(dictionary=True) as cursor:
         cursor.execute(
             """
@@ -521,6 +574,7 @@ def get_dataset(dataset_id):
 
     dataset = {key: _to_json_value(value) for key, value in row.items()}
     dataset["metrics"] = metrics
+    _cache_set(("dataset", dataset_id), dataset)
     return dataset
 
 
@@ -563,7 +617,9 @@ def delete_dataset(dataset_id):
         cursor.execute(
             "DELETE FROM datasets WHERE id = %s RETURNING id", (dataset_id,)
         )
-        return len(cursor.returned_rows) > 0
+        removed = len(cursor.returned_rows) > 0
+    _invalidate_meta()
+    return removed
 
 
 # ---------------------------------------------------------------------------
@@ -681,6 +737,7 @@ def replace_price_rows_from(dataset_id, price_rows, start_date):
             (dataset_id,),
         )
         after = int(cursor.fetchone()[0])
+        _invalidate_meta()
         return {"added": after - before, "replaced": replaced}
 
 
@@ -707,7 +764,9 @@ def update_dataset_metadata(dataset_id, end_date, row_count, latest_close):
             """,
             (end_date, row_count, latest_close, dataset_id),
         )
-        return len(cursor.returned_rows) > 0
+        updated = len(cursor.returned_rows) > 0
+    _invalidate_meta()
+    return updated
 
 
 def delete_analysis_caches(dataset_id):
