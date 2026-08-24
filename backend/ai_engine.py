@@ -121,6 +121,16 @@ def get_provider_config():
     model = (os.getenv("AI_MODEL") or "").strip()
     base_url = (os.getenv("AI_BASE_URL") or "").strip()
 
+    # Convenience aliases: GROQ_API_KEY / OPENAI_API_KEY / GEMINI_API_KEY
+    # are accepted when the generic AI_API_KEY is not set.
+    provider_key_alias = {
+        "groq": "GROQ_API_KEY",
+        "openai": "OPENAI_API_KEY",
+        "gemini": "GEMINI_API_KEY",
+    }.get(provider)
+    if not api_key and provider_key_alias:
+        api_key = (os.getenv(provider_key_alias) or "").strip()
+
     if not provider:
         return {"configured": False, "provider": None, "reason": "AI_PROVIDER is not set"}
 

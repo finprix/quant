@@ -68,7 +68,7 @@ async def lifespan(_):
     yield
 
 
-app = FastAPI(title="QUANT VECTOR API", version="0.13.0", lifespan=lifespan)
+app = FastAPI(title="QUANT VECTOR API", version="0.14.0", lifespan=lifespan)
 
 _ALLOWED_ORIGINS = [
     origin.strip()
@@ -78,6 +78,15 @@ _ALLOWED_ORIGINS = [
     ).split(",")
     if origin.strip()
 ]
+# FRONTEND_URL (comma-separated list supported) is merged in for hosting
+# platforms where the deployed UI origin is the only special configuration.
+for _extra in os.environ.get("FRONTEND_URL", "").split(","):
+    if _extra.strip() and _extra.strip() not in _ALLOWED_ORIGINS:
+        _ALLOWED_ORIGINS.append(_extra.strip())
+# Local development always stays allowed.
+for _dev in ("http://localhost:5173", "http://127.0.0.1:5173", "http://localhost:3000"):
+    if _dev not in _ALLOWED_ORIGINS:
+        _ALLOWED_ORIGINS.append(_dev)
 
 app.add_middleware(
     CORSMiddleware,
@@ -169,8 +178,20 @@ def auth_session(request: Request):
 
 @app.get("/health")
 def health():
-    """Liveness probe."""
-    return {"status": "ok"}
+    """Liveness probe — never runs quantitative work, never raises.
+
+    Database connectivity is reported separately so orchestrators can use
+    this endpoint for basic liveness even while MySQL is unreachable.
+    """
+    database_state = "unavailable"
+    try:
+        with database.get_cursor() as cursor:
+            cursor.execute("SELECT 1")
+            cursor.fetchone()
+        database_state = "connected"
+    except Exception:
+        pass
+    return {"status": "ok", "service": "quant-vector-api", "database": database_state}
 
 
 @app.post("/upload", dependencies=[Depends(require_developer)])

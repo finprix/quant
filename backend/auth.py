@@ -125,7 +125,7 @@ def _unb64url(text: str) -> bytes:
 
 
 def _secret_key() -> bytes:
-    explicit = _env("MARKETDNA_SESSION_SECRET")
+    explicit = _env("MARKETDNA_SESSION_SECRET") or _env("SESSION_SECRET")
     if explicit:
         return explicit.encode("utf-8")
     # Ephemeral fallback: sessions die on restart rather than being forgeable
@@ -180,11 +180,11 @@ def read_session_token(token) -> str | None:
 # --------------------------------------------------------------------------
 
 def auth_configured() -> bool:
-    return bool(_env("MARKETDNA_DEV_PIN_HASH"))
+    return bool(_env("MARKETDNA_DEV_PIN_HASH") or _env("DEVELOPER_PIN_HASH"))
 
 
 def configured_pin_hash():
-    return _env("MARKETDNA_DEV_PIN_HASH")
+    return _env("MARKETDNA_DEV_PIN_HASH") or _env("DEVELOPER_PIN_HASH")
 
 
 def cookie_kwargs() -> dict:

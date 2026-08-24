@@ -246,7 +246,8 @@ def test_api_integration():
 
         _ts.login(client)
         health = client.get("/health").json()
-        check("GET /health", health == {"status": "ok"})
+        check("GET /health", health.get("status") == "ok"
+              and health.get("service") == "quant-vector-api")
 
         csv_bytes = build_synthetic_ohlcv().to_csv(index=False).encode()
         upload = client.post(

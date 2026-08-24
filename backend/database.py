@@ -26,6 +26,16 @@ _ENV_DEFAULTS = {
     "MYSQL_DATABASE": "market_dna",
 }
 
+# Hosted-platform friendly aliases. Precedence: MYSQL_* (project standard)
+# -> DB_* -> Railway's MYSQLHOST-style variables -> local defaults.
+_ENV_ALIASES = {
+    "MYSQL_HOST": ("DB_HOST", "MYSQLHOST"),
+    "MYSQL_PORT": ("DB_PORT", "MYSQLPORT"),
+    "MYSQL_USER": ("DB_USER", "MYSQLUSER"),
+    "MYSQL_PASSWORD": ("DB_PASSWORD", "MYSQLPASSWORD"),
+    "MYSQL_DATABASE": ("DB_NAME", "MYSQLDATABASE"),
+}
+
 
 class DatabaseError(RuntimeError):
     """Raised for any connectivity or query failure."""
@@ -46,15 +56,37 @@ def _load_env_file(path=BASE_DIR / ".env"):
             os.environ[key] = value
 
 
+def _env_value(canonical):
+    """Resolve one setting through its alias chain."""
+    value = os.environ.get(canonical, "").strip()
+    if value:
+        return value
+    for alias in _ENV_ALIASES[canonical]:
+        value = os.environ.get(alias, "").strip()
+        if value:
+            return value
+    return ""
+
+
+def database_name_is_explicit():
+    """True when a target database name comes from the environment."""
+    _load_env_file()
+    return bool(_env_value("MYSQL_DATABASE"))
+
+
 def get_config():
     """Return the MySQL connection settings from the environment."""
     _load_env_file()
     return {
-        "host": os.environ.get("MYSQL_HOST", _ENV_DEFAULTS["MYSQL_HOST"]),
-        "port": int(os.environ.get("MYSQL_PORT", _ENV_DEFAULTS["MYSQL_PORT"])),
-        "user": os.environ.get("MYSQL_USER", _ENV_DEFAULTS["MYSQL_USER"]),
-        "password": os.environ.get("MYSQL_PASSWORD", _ENV_DEFAULTS["MYSQL_PASSWORD"]),
-        "database": os.environ.get("MYSQL_DATABASE", _ENV_DEFAULTS["MYSQL_DATABASE"]),
+        "host": _env_value("MYSQL_HOST") or _ENV_DEFAULTS["MYSQL_HOST"],
+        "port": int(_env_value("MYSQL_PORT") or _ENV_DEFAULTS["MYSQL_PORT"]),
+        "user": _env_value("MYSQL_USER") or _ENV_DEFAULTS["MYSQL_USER"],
+        "password": _env_value("MYSQL_PASSWORD"),
+        "database": _env_value("MYSQL_DATABASE") or _ENV_DEFAULTS["MYSQL_DATABASE"],
+        "connection_timeout": int(os.environ.get("MYSQL_CONNECT_TIMEOUT", "10")),
+        # Hosted MySQL (e.g. Railway proxy) benefits from explicit TCP
+        # keepalives so idle pooled sockets are not dropped silently.
+        "pool_reset_session": True,
     }
 
 
@@ -89,12 +121,27 @@ def get_cursor(dictionary=False):
 
 
 def initialize_schema():
-    """Apply schema.sql (every statement is idempotent)."""
+    """Apply schema.sql (every statement is idempotent).
+
+    When an explicit database name is configured (hosted MySQL), the
+    connection selects it directly and the file's CREATE DATABASE / USE
+    provisioning statements are skipped so any database name works.
+    """
     raw_lines = SCHEMA_PATH.read_text(encoding="utf-8").splitlines()
     # Drop comment lines so statement splitting on ';' stays trivial.
     cleaned = "\n".join(line for line in raw_lines if not line.lstrip().startswith("--"))
 
-    connection = create_connection(use_database=False)
+    use_explicit_database = database_name_is_explicit()
+    if use_explicit_database:
+        provisioned = []
+        for statement in cleaned.split(";"):
+            head = statement.strip().split("\n", 1)[0].strip().upper()
+            if head.startswith("CREATE DATABASE") or head.startswith("USE "):
+                continue
+            provisioned.append(statement)
+        cleaned = ";".join(provisioned)
+
+    connection = create_connection(use_database=not use_explicit_database)
     cursor = connection.cursor()
     try:
         for statement in cleaned.split(";"):
