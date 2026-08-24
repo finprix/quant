@@ -16,7 +16,7 @@ and regression analysis, and an exportable research report.
 
 ## Overview
 
-- Upload one or many CSV files of OHLCV data; everything persists to MySQL.
+- Upload one or many CSV files of OHLCV data; everything persists to Turso / libSQL (MySQL-compatible workflow preserved via SQL).
 - Each dataset gets a statistical fingerprint — volatility, drawdown, skewness,
   autocorrelation, trend alignment and more.
 - The analogue engine finds the most statistically similar past windows to the present one
@@ -45,15 +45,15 @@ and regression analysis, and an exportable research report.
 | Layer | Technology |
 |---|---|
 | Backend | Python 3.12+, FastAPI, Uvicorn |
-| Database | MySQL 8.x (InnoDB), `mysql-connector-python` |
+| Database | Turso / libSQL (MySQL-compatible workflow preserved via SQL) 8.x (InnoDB), `mysql-connector-python` |
 | Quant | pandas, NumPy, SciPy, statsmodels, scikit-learn |
 | Frontend | React 19, Vite 7, react-router-dom 7, recharts 3, html-to-image |
-| Tests | Self-contained suites using FastAPI `TestClient` against real MySQL |
+| Tests | Self-contained suites using FastAPI `TestClient` against real Turso / libSQL (MySQL-compatible workflow preserved via SQL) |
 
 ## Architecture
 
 ```
-CSV → FastAPI → validation/cleaning → MySQL → quant engines → intelligence layer
+CSV → FastAPI → validation/cleaning → Turso / libSQL (MySQL-compatible workflow preserved via SQL) → quant engines → intelligence layer
     → REST API → React frontend
 ```
 
@@ -105,7 +105,7 @@ market-dna/
 - Windows / macOS / Linux
 - Python 3.12 or newer
 - Node.js 18+ (with npm)
-- MySQL Server 8.x running locally
+- Turso / libSQL (MySQL-compatible workflow preserved via SQL) Server 8.x running locally
 
 ## Installation
 
@@ -123,9 +123,9 @@ cd ..\frontend
 npm install
 ```
 
-## MySQL Setup
+## Turso / libSQL (MySQL-compatible workflow preserved via SQL) Setup
 
-1. Ensure the MySQL service is running (`services.msc` → MySQL80, or your own install).
+1. Ensure the Turso / libSQL (MySQL-compatible workflow preserved via SQL) service is running (`services.msc` → Turso / libSQL (MySQL-compatible workflow preserved via SQL)80, or your own install).
 2. Credentials are read by the backend; create the database automatically on first start
    (schema.sql runs `CREATE DATABASE IF NOT EXISTS`), or pre-create it:
 
@@ -219,7 +219,7 @@ python -c "import auth; print(auth.hash_password('YOUR NEW PIN'))"
    save selections as presets.
 4. Ask the AI analyst grounded questions on the AI page.
 5. Export the research report from the Report page (print/PDF, PNG charts, CSV tables).
-6. Inspect the actual MySQL tables on the Database page: live row counts,
+6. Inspect the actual Turso / libSQL (MySQL-compatible workflow preserved via SQL) tables on the Database page: live row counts,
    real stored rows with pagination/filtering/sorting, full schema (primary
    keys, foreign keys, unique constraints such as the one-row-per-dataset-date
    protection), per-dataset storage breakdown, data lineage and a manual
@@ -268,7 +268,7 @@ Interactive docs at `/docs` (Swagger UI).
 
 ## Testing
 
-Backend (from `backend/`, with MySQL running):
+Backend (from `backend/`, with Turso / libSQL (MySQL-compatible workflow preserved via SQL) running):
 
 ```powershell
 python -m py_compile main.py analytics.py fingerprint.py regimes.py intelligence.py cross_market.py database.py

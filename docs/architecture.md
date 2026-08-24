@@ -7,7 +7,7 @@ CSV upload                          Market data fetch (v0.10)
 FastAPI (main.py) ── validation & cleaning (analytics.py)      provider abstraction (data_sources/)
     │                                                          │  search + fetch + strict
     ▼                                                          ▼  normalize_ohlcv
-MySQL (market_dna)  ◄──── parameterized queries, cascade deletes, JSON caches, INSERT IGNORE appends
+libSQL/Turso (market_dna)  ◄──── parameterized queries, cascade deletes, JSON caches, INSERT IGNORE appends
     │
     ▼
 Quant engines            fingerprint.py ─► analogues
@@ -27,8 +27,8 @@ React frontend (Vite) ── dashboard pages, market library, multi-asset overvi
 
 ## Database architecture (v0.11.0)
 
-MySQL (`market_dna`) is the canonical source of truth. Responsibilities are
-strictly separated: providers acquire, MySQL persists, Quant Vector analyses,
+libSQL/Turso (`market_dna`) is the canonical source of truth. Responsibilities are
+strictly separated: providers acquire, libSQL/Turso persists, Quant Vector analyses,
 the frontend visualizes, the AI interprets.
 
 ```
@@ -70,7 +70,7 @@ gate. A missing/invalid session gets **401**, an authenticated session
 without sufficient role would get **403**.
 
 SQL console (v0.12.1): `POST /database/query` lets developers run the same
-statements they would in MySQL Workbench. It is fenced in depth: single
+statements they would in libSQL/Turso Workbench. It is fenced in depth: single
 statement, read-only prefixes only (`SELECT`/`WITH`/`SHOW`/`DESCRIBE`/
 `EXPLAIN`), mutating keywords denied anywhere in the text (catches
 `WITH … DELETE`), `INTO OUTFILE/DUMPFILE/@var` denied, and — as the last
@@ -105,7 +105,7 @@ separate API host), and `MARKETDNA_ALLOWED_ORIGINS` for CORS.
 |---|---|
 | `main.py` | FastAPI app: routing, request validation, orchestration, response shaping. Version constant lives here. |
 | `analytics.py` | CSV cleaning (`clean_ohlcv`), summary statistics and per-date chart series. First gate for bad data. |
-| `database.py` | Every MySQL query. Parameterized statements only; JSON-safe type conversion; CRUD helpers incl. intelligence snapshot cache and preset persistence. |
+| `database.py` | Every libSQL/Turso query. Parameterized statements only; JSON-safe type conversion; CRUD helpers incl. intelligence snapshot cache and preset persistence. |
 | `fingerprint.py` | Statistical fingerprint, the 18-feature `VECTOR_FEATURES` pipeline, historical analogue search with temporal suppression, pairwise scale-free fingerprint comparison + pooled reference population. |
 | `regimes.py` | Sliding-window generation, StandardScaler → PCA → KMeans pipeline, automatic k selection (silhouette/Davies–Bouldin), regime profiles, transition matrices, conditional outcomes, current-regime projection. |
 | `intelligence.py` | Fuses trend/anologue/regime/risk evidence into a bounded scorecard with confidence, contradictions, deterministic prose summary; parameter-hash snapshot caching. |
@@ -113,12 +113,12 @@ separate API host), and `MARKETDNA_ALLOWED_ORIGINS` for CORS.
 | `ai_engine.py` | Optional AI layer: env-driven provider config (OpenAI/Groq/Gemini/Ollama/OpenAI-compatible via httpx), Quant Vector tool/context builders that reuse the engines and their caches (incl. the market universe), strict "no invented numbers" system prompt, offline-safe responses. Serves `GET /ai/status` + `POST /ai/query`. |
 | `market_ingest.py` | Ingestion orchestrator: import/update jobs with a stage machine (FETCHING → VALIDATING → WRITING TO MYSQL → PREPARING DATASET → COMPLETE/FAILED), incremental updates that heal the boundary session, real-count receipts (received/valid/rejected/inserted/replaced), cache invalidation on data change, and the market-universe rollup behind `GET /market/overview`. |
 | `auth.py` | Access control core (stdlib-only): scrypt password hashing with timing-safe verification, HMAC-SHA256-signed HTTP-only session cookies, `.env` loader and a sliding-window login rate limiter. Credentials live exclusively in backend environment variables — never in the frontend, never in Git. |
-| `db_inspector.py` | Read-only MySQL inspector behind the DATABASE page: server-side table whitelist, schema-resolved identifiers, parameterized values only, bounded pagination (max 500). Exposes status/latency, exact row counts, full schema (PK/FK/unique/indexes), filtered+sorted row pages, per-dataset storage breakdown, DBMS statistics and a manual read-only integrity check. No arbitrary SQL can reach the database. |
+| `db_inspector.py` | Read-only libSQL/Turso inspector behind the DATABASE page: server-side table whitelist, schema-resolved identifiers, parameterized values only, bounded pagination (max 500). Exposes status/latency, exact row counts, full schema (PK/FK/unique/indexes), filtered+sorted row pages, per-dataset storage breakdown, DBMS statistics and a manual read-only integrity check. No arbitrary SQL can reach the database. |
 | `data_sources/` | Provider abstraction (`base.py`: exceptions, canonical columns, strict `normalize_ohlcv` — bad-candle removal, duplicate-date protection, minimum-observation gate, never fabricates rows). Yahoo Finance implementation (`yahoo.py`, structured yfinance search + history) and a CSV frame source; registry in `__init__.py`. |
 | `schema.sql` | Idempotent DDL: 10 InnoDB tables (incl. `dataset_sources` provenance), foreign keys with cascades, purposeful indexes. |
 
 Supporting files: `test_*.py` self-test suites (run directly, in-process TestClient against real
-MySQL), `benchmark_phase8.py` performance harness, `.env.example`, `requirements.txt`.
+libSQL/Turso), `benchmark_phase8.py` performance harness, `.env.example`, `requirements.txt`.
 
 ## Frontend areas
 
@@ -128,7 +128,7 @@ MySQL), `benchmark_phase8.py` performance harness, `.env.example`, `requirements
 | `src/context/` | `DatasetContext`: dataset list + active-dataset id persisted to `localStorage`. |
 | `src/hooks/useApiData.js` | URL-keyed shared response cache with per-category TTLs, invalidation on mutations, single-flight dedup, parallel fetch helper (`Promise.all`). |
 | `src/components/` | App shell, charts, states (loading/error/empty), modal + confirm dialog, reusable UI primitives, `compare/*` widgets (matrices, rolling view, regression view, preset manager), `market/MarketOverviewPanel` (real multi-asset heatmap). |
-| `src/pages/` | Overview (incl. market overview heatmap), Datasets/Market Library (CSV upload + Yahoo fetch with staged import pipeline, import/update receipts and VIEW MYSQL DATA links), FingerprintPage, AnaloguesPage, RegimesPage, IntelligencePage, ComparePage (metrics + cross-market tabs), AiPage, ReportPage (print/PDF report), DatabasePage (live MySQL inspector). Larger pages are `React.lazy` code-split. |
+| `src/pages/` | Overview (incl. market overview heatmap), Datasets/Market Library (CSV upload + Yahoo fetch with staged import pipeline, import/update receipts and VIEW MYSQL DATA links), FingerprintPage, AnaloguesPage, RegimesPage, IntelligencePage, ComparePage (metrics + cross-market tabs), AiPage, ReportPage (print/PDF report), DatabasePage (live libSQL/Turso inspector). Larger pages are `React.lazy` code-split. |
 | `src/lib/` | Formatting helpers (N/A-safe), CSV/PNG export utilities, comparison-matrix definitions. |
 | `src/styles/` | Dark "quant terminal" theme plus dedicated print stylesheet (light tokens, hidden chrome, page-break rules). |
 
@@ -137,7 +137,7 @@ MySQL), `benchmark_phase8.py` performance harness, `.env.example`, `requirements
 1. React calls `useParallelApiData(["/datasets/{id}/fingerprint", ... "/datasets/{id}/intelligence"])`.
 2. Cache hook serves fresh TTL entries immediately; misses are fetched once.
 3. `main.py` checks `intelligence_snapshots` **before** loading price rows; a hit returns instantly.
-4. On a miss it loads prices from MySQL, runs analogue search + regime discovery + scoring,
+4. On a miss it loads prices from libSQL/Turso, runs analogue search + regime discovery + scoring,
    stores a new snapshot keyed by SHA-256(parameters), and returns the payload.
 5. The frontend renders tiles/charts; disclaimers render from API-provided text.
 
@@ -161,7 +161,7 @@ flowchart LR
         MAIN --> XM[cross_market.py]
         MAIN --> INTEL[intelligence.py]
     end
-    DB[(MySQL market_dna)]
+    DB[(libSQL/Turso market_dna)]
     CSV[[CSV file]] -->|POST /upload| MAIN
     API -->|REST JSON| MAIN
     ANALYTICS --> DB

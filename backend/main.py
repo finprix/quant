@@ -68,7 +68,7 @@ async def lifespan(_):
     yield
 
 
-app = FastAPI(title="QUANT VECTOR API", version="0.14.1", lifespan=lifespan)
+app = FastAPI(title="QUANT VECTOR API", version="0.15.0", lifespan=lifespan)
 
 _ALLOWED_ORIGINS = [
     origin.strip()
@@ -1014,6 +1014,27 @@ def market_overview():
         "imported_count": len(imported),
         "total_count": len(universe),
     }
+
+
+@app.get("/market/quote/{symbol}")
+def market_quote(symbol: str):
+    """Near-real-time quote for one symbol (60 s TTL, no persistence).
+
+    Live numbers come straight from the provider into Python — the
+    database is not involved in this path.
+    """
+    try:
+        return market_ingest.get_live_quote(symbol)
+    except InvalidSymbol as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    except DataSourceUnavailable as exc:
+        raise HTTPException(status_code=502, detail=str(exc))
+    except Exception:
+        raise HTTPException(
+            status_code=502,
+            detail="Live market data temporarily unavailable. "
+                   "Showing most recently cached data is advised.",
+        )
 
 
 # ---------------------------------------------------------------------------

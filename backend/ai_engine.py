@@ -497,19 +497,39 @@ def _call_llm(cfg, question, context_json):
             },
         ],
     }
-    try:
-        response = httpx.post(url, json=body, headers=headers, timeout=REQUEST_TIMEOUT_SECONDS)
-    except httpx.HTTPError:
-        # Sanitized on purpose: transport errors can embed the provider host
-        # or model id. Full detail stays in the server log only.
-        print("[ai_engine] provider request failed:", url.rsplit("/", 1)[0])
-        raise AIEngineError("The analysis engine could not reach its reasoning service.") from None
-    if response.status_code >= 400:
+    import time as _time
+
+    last_error = None
+    for attempt in range(2):  # one automatic retry for transient failures
+        try:
+            response = httpx.post(
+                url, json=body, headers=headers,
+                timeout=REQUEST_TIMEOUT_SECONDS,
+            )
+        except httpx.HTTPError:
+            print("[ai_engine] provider request failed:", url.rsplit("/", 1)[0])
+            last_error = "network"
+            _time.sleep(1.5 * (attempt + 1))
+            continue
+        if response.status_code < 400:
+            break
+        if response.status_code in (408, 409, 429, 500, 502, 503, 504) \
+                and attempt == 0:
+            detail = response.text[:200]
+            print(f"[ai_engine] transient HTTP {response.status_code}; "
+                  f"retrying once: {detail}")
+            last_error = f"http-{response.status_code}"
+            _time.sleep(2)
+            continue
         detail = response.text[:300]
         print(f"[ai_engine] provider HTTP {response.status_code}: {detail}")
         raise AIEngineError(
             f"The analysis engine rejected the request (HTTP {response.status_code})."
         ) from None
+    else:
+        raise AIEngineError(
+            "The analysis engine could not reach its reasoning service."
+        )
     data = response.json()
     try:
         return data["choices"][0]["message"]["content"]

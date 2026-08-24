@@ -1,41 +1,34 @@
-"""MySQL persistence layer for QUANT VECTOR.
+"""Quant Vector persistence layer — Turso/libSQL (SQLite dialect).
 
-Configuration is read from environment variables, optionally loaded from a
-backend/.env file. No ORM is used and every query is parameterized.
+Two interchangeable drivers sit behind one tiny wrapper:
+
+  * TURSO_DATABASE_URL is set  -> hosted Turso/libSQL via libsql-client
+    (pure Python; libsql:// or wss:// enables real transactions).
+  * otherwise                  -> embedded local database through stdlib
+    sqlite3 at LIBSQL_LOCAL_PATH (default data/quantvector.db), so local
+    development needs no server at all.
+
+Both drivers speak the same SQL dialect. A translation shim converts the
+few remaining MySQL-isms (%s placeholders, INSERT IGNORE, backticks,
+NOW()) so calling modules stay readable. All queries are parameterized.
+
+Public function signatures match the previous MySQL implementation, which
+keeps the quant engines, API routes and tests unchanged.
 """
 
 import hashlib
 import json
 import os
+import re
+import sqlite3
 from contextlib import contextmanager
 from datetime import date, datetime
 from decimal import Decimal
 from pathlib import Path
 
-import mysql.connector
-from mysql.connector import Error as MySQLError
-
 BASE_DIR = Path(__file__).resolve().parent
 SCHEMA_PATH = BASE_DIR / "schema.sql"
-
-_ENV_DEFAULTS = {
-    "MYSQL_HOST": "localhost",
-    "MYSQL_PORT": "3306",
-    "MYSQL_USER": "root",
-    "MYSQL_PASSWORD": "",
-    "MYSQL_DATABASE": "market_dna",
-}
-
-# Hosted-platform friendly aliases. Precedence: MYSQL_* (project standard)
-# -> DB_* -> Railway-style MYSQLHOST variables -> Vercel Marketplace TiDB
-# (TIDB_*) -> local defaults.
-_ENV_ALIASES = {
-    "MYSQL_HOST": ("DB_HOST", "MYSQLHOST", "TIDB_HOST"),
-    "MYSQL_PORT": ("DB_PORT", "MYSQLPORT", "TIDB_PORT"),
-    "MYSQL_USER": ("DB_USER", "MYSQLUSER", "TIDB_USER"),
-    "MYSQL_PASSWORD": ("DB_PASSWORD", "MYSQLPASSWORD", "TIDB_PASSWORD"),
-    "MYSQL_DATABASE": ("DB_NAME", "MYSQLDATABASE", "TIDB_DATABASE"),
-}
+DEFAULT_LOCAL_DB = BASE_DIR / "data" / "quantvector.db"
 
 
 class DatabaseError(RuntimeError):
@@ -57,75 +50,279 @@ def _load_env_file(path=BASE_DIR / ".env"):
             os.environ[key] = value
 
 
-def _env_value(canonical):
-    """Resolve one setting through its alias chain."""
-    value = os.environ.get(canonical, "").strip()
-    if value:
-        return value
-    for alias in _ENV_ALIASES[canonical]:
-        value = os.environ.get(alias, "").strip()
-        if value:
-            return value
-    return ""
-
-
-def database_name_is_explicit():
-    """True when a target database name comes from the environment."""
-    _load_env_file()
-    return bool(_env_value("MYSQL_DATABASE"))
-
-
-def _uses_remote_host(host):
-    """True when the target is clearly not a local development server."""
-    return str(host).lower() not in ("localhost", "127.0.0.1", "::1")
-
-
 def get_config():
-    """Return the MySQL connection settings from the environment."""
+    """Return the active database configuration (no secrets redacted here:
+    callers only log host/url shapes, never tokens)."""
     _load_env_file()
-    config = {
-        "host": _env_value("MYSQL_HOST") or _ENV_DEFAULTS["MYSQL_HOST"],
-        "port": int(_env_value("MYSQL_PORT") or _ENV_DEFAULTS["MYSQL_PORT"]),
-        "user": _env_value("MYSQL_USER") or _ENV_DEFAULTS["MYSQL_USER"],
-        "password": _env_value("MYSQL_PASSWORD"),
-        "database": _env_value("MYSQL_DATABASE") or _ENV_DEFAULTS["MYSQL_DATABASE"],
-        "connection_timeout": int(os.environ.get("MYSQL_CONNECT_TIMEOUT", "10")),
-        # Hosted MySQL (e.g. Railway proxy) benefits from explicit TCP
-        # keepalives so idle pooled sockets are not dropped silently.
-        "pool_reset_session": True,
+    url = (os.environ.get("TURSO_DATABASE_URL") or "").strip()
+    token = (os.environ.get("TURSO_AUTH_TOKEN") or "").strip()
+    if url:
+        return {
+            "mode": "turso",
+            "url": url,
+            "auth_token": token,
+            "driver": "libsql-client",
+        }
+    local_path = (
+        os.environ.get("LIBSQL_LOCAL_PATH", "").strip()
+        or str(DEFAULT_LOCAL_DB)
+    )
+    return {
+        "mode": "local",
+        "url": f"file:{Path(local_path)}",
+        "auth_token": None,
+        "driver": "sqlite3",
+        "path": Path(local_path),
     }
 
-    # TLS for managed cloud MySQL services (TiDB Cloud Serverless requires
-    # it). Certificate verification stays ON; MYSQL_SSL_VERIFY=false is an
-    # explicit local-testing escape hatch and is never implied by default.
-    tidb_present = any(
-        os.environ.get(name) for name in ("TIDB_HOST", "TIDB_PORT", "TIDB_USER")
-    )
-    remote_or_tidb = _uses_remote_host(config["host"]) or tidb_present
-    ssl_required = os.environ.get("MYSQL_SSL_REQUIRED", "").strip().lower() in (
-        "1", "true", "yes", "on",
-    )
-    verify = os.environ.get("MYSQL_SSL_VERIFY", "").strip().lower()
-    if remote_or_tidb or ssl_required:
-        config["ssl_verify_cert"] = verify not in ("0", "false", "no", "off")
-        config["ssl_verify_identity"] = config["ssl_verify_cert"]
-        ca_path = os.environ.get("MYSQL_SSL_CA", "").strip()
-        if ca_path:
-            config["ssl_ca"] = ca_path
-    return config
+
+# ---------------------------------------------------------------------------
+# SQL translation: tolerate MySQL-flavoured literals in calling code
+# ---------------------------------------------------------------------------
+
+_TRANSLATE_RULES = (
+    (re.compile(r"\bINSERT\s+IGNORE\s+INTO\b", re.IGNORECASE),
+     "INSERT OR IGNORE INTO"),
+    (re.compile(r"\bNOW\(\)", re.IGNORECASE), "CURRENT_TIMESTAMP"),
+)
 
 
-def create_connection(use_database=True):
-    """Open a new MySQL connection; raises DatabaseError on failure."""
-    config = get_config()
-    if not use_database:
-        config.pop("database", None)
+def _translate_sql(sql):
+    text = sql.replace("%s", "?").replace("`", '"')
+    for pattern, replacement in _TRANSLATE_RULES:
+        text = pattern.sub(replacement, text)
+    return text
+
+
+def _coerce_param(value):
+    if isinstance(value, bool):
+        return int(value)
+    if isinstance(value, Decimal):
+        return float(value)
+    if isinstance(value, datetime):
+        return value.isoformat(sep=" ")
+    if isinstance(value, date):
+        return value.isoformat()
+    return value
+
+
+def _coerce_params(params):
+    if not params:
+        return []
+    return [_coerce_param(v) for v in params]
+
+
+# ---------------------------------------------------------------------------
+# Drivers
+# ---------------------------------------------------------------------------
+
+class _RemoteTransaction:
+    """Thin adapter exposing commit()/rollback() over a libSQL transaction."""
+
+    def __init__(self, client):
+        self.client = client
+        self.txn = None
+        try:
+            self.txn = client.transaction()
+            self.supported = True
+        except Exception:
+            self.supported = False
+
+
+class ConnectionWrapper:
+    """Uniform connection facade over sqlite3 or libsql-client."""
+
+    def __init__(self, config, readonly=False):
+        self.config = config
+        self.mode = config["mode"]
+        self.readonly = readonly
+        self._client = None
+        self._txn = None
+        self._txn_failed = False
+        if self.mode == "turso":
+            import libsql_client
+
+            self._client = libsql_client.create_client_sync(
+                config["url"], auth_token=config["auth_token"] or None,
+            )
+            if readonly:
+                try:
+                    self._client.execute("PRAGMA query_only = ON")
+                except Exception:
+                    pass  # best effort on transports that reject PRAGMA
+        else:
+            path = Path(config["path"])
+            path.parent.mkdir(parents=True, exist_ok=True)
+            # isolation_level=None -> autocommit off at the driver level;
+            # transactions are managed explicitly via begin/commit/rollback,
+            # mirroring the previous MySQL semantics.
+            if readonly:
+                uri = f"file:{path.as_posix()}?mode=ro"
+                self._conn = sqlite3.connect(
+                    uri, timeout=15, isolation_level=None, uri=True,
+                )
+            else:
+                self._conn = sqlite3.connect(
+                    str(path), timeout=15, isolation_level=None,
+                )
+            self._conn.row_factory = sqlite3.Row
+            if not readonly:
+                self._conn.execute("PRAGMA foreign_keys = ON")
+                try:
+                    self._conn.execute("PRAGMA journal_mode = WAL")
+                except sqlite3.DatabaseError:
+                    pass
+
+    # -- internal execution -------------------------------------------------
+
+    def _run_local(self, sql, params):
+        cur = self._conn.execute(sql, params)
+        columns = [d[0] for d in cur.description] if cur.description else []
+        rows = [tuple(r) for r in cur.fetchall()] if columns else []
+        return {
+            "columns": columns,
+            "rows": rows,
+            "rowcount": cur.rowcount,
+            "lastrowid": cur.lastrowid,
+        }
+
+    def _run_remote(self, sql, params):
+        executor = self._txn if self._txn is not None else self._client
+        rs = executor.execute(sql, params)
+        columns = list(rs.columns) if getattr(rs, "columns", None) else []
+        rows = [tuple(row) for row in rs.rows] if columns else []
+        # libSQL result sets do not carry an affected-row count; write
+        # statements that need one use RETURNING (see cursor.returned_rows).
+        return {"columns": columns, "rows": rows, "rowcount": len(rows),
+                "lastrowid": None}
+
+    def execute(self, sql, params=()):
+        translated = _translate_sql(sql)
+        params = _coerce_params(params)
+        try:
+            if self.mode == "turso":
+                return self._run_remote(translated, params)
+            return self._run_local(translated, params)
+        except DatabaseError:
+            raise
+        except Exception as exc:
+            self._txn_failed = True
+            raise DatabaseError(f"Query failed: {exc}") from exc
+
+    def begin(self):
+        """Start an explicit multi-statement transaction (best effort)."""
+        if self.mode == "turso":
+            self._txn_failed = False
+            try:
+                self._txn = self._client.transaction()
+            except Exception:
+                # http(s) transport has no server-side transactions;
+                # statements run sequentially (documented limitation).
+                self._txn = None
+        else:
+            self._conn.execute("BEGIN")
+
+    def commit(self):
+        if self.mode == "turso":
+            if self._txn is not None:
+                if self._txn_failed:
+                    self._txn.rollback()
+                else:
+                    self._txn.commit()
+                self._txn = None
+            # individual execute() calls are committed by the server
+        else:
+            self._conn.commit()
+
+    def rollback(self):
+        if self.mode == "turso":
+            if self._txn is not None:
+                try:
+                    self._txn.rollback()
+                except Exception:
+                    pass
+                self._txn = None
+        else:
+            self._conn.rollback()
+
+    def close(self):
+        if self.mode == "turso":
+            if self._txn is not None:
+                try:
+                    self._txn.rollback()
+                except Exception:
+                    pass
+            try:
+                self._client.close()
+            except Exception:
+                pass
+        else:
+            self._conn.close()
+
+    def cursor(self, dictionary=False, buffered=False):  # buffered ignored
+        return CursorWrapper(self, dictionary=dictionary)
+
+
+class CursorWrapper:
+    """Cursor facade mirroring the mysql-connector surface that the
+    quant engines already use."""
+
+    def __init__(self, connection, dictionary=False):
+        self.connection = connection
+        self.dictionary = dictionary
+        self.columns = []
+        self.rows = []
+        self.rowcount = -1
+        self.lastrowid = None
+        self.returned_rows = []
+
+    @property
+    def description(self):
+        return [(name,) for name in self.columns] if self.columns else None
+
+    def _absorb(self, result):
+        self.columns = result["columns"]
+        self.rows = result["rows"]
+        self.rowcount = result["rowcount"]
+        self.lastrowid = result["lastrowid"]
+        self.returned_rows = result["rows"]
+
+    def execute(self, sql, params=()):
+        self._absorb(self.connection.execute(sql, params))
+
+    def fetchone(self):
+        if not self.rows:
+            return None
+        row = self.rows.pop(0)
+        return self._shape(row)
+
+    def fetchall(self):
+        rows, self.rows = self.rows, []
+        return [self._shape(row) for row in rows]
+
+    def fetchmany(self, size=1):
+        taken, self.rows = self.rows[:size], self.rows[size:]
+        return [self._shape(row) for row in taken]
+
+    def _shape(self, row):
+        if self.dictionary:
+            return {name: value for name, value in zip(self.columns, row)}
+        return row
+
+    def close(self):
+        self.rows = []
+
+
+def create_connection(use_database=True, readonly=False):
+    """Open a new database connection; raises DatabaseError on failure."""
     try:
-        return mysql.connector.connect(**config)
-    except MySQLError as exc:
+        return ConnectionWrapper(get_config(), readonly=readonly)
+    except DatabaseError:
+        raise
+    except Exception as exc:
+        cfg = get_config()
         raise DatabaseError(
-            f"MySQL connection failed ({config['host']}:{config['port']} "
-            f"as {config['user']}, database '{config.get('database')}'): {exc}"
+            f"Database connection failed ({cfg['mode']} {cfg['url']}): {exc}"
         ) from exc
 
 
@@ -137,7 +334,15 @@ def get_cursor(dictionary=False):
     try:
         yield cursor
         connection.commit()
-    except MySQLError as exc:
+    except DatabaseError:
+        connection.rollback()
+        raise
+    except (ValueError, LookupError, KeyError):
+        # Application-level validation errors keep their original type so
+        # routes/tests can distinguish them from driver failures.
+        connection.rollback()
+        raise
+    except Exception as exc:
         connection.rollback()
         raise DatabaseError(f"Query failed: {exc}") from exc
     finally:
@@ -145,95 +350,78 @@ def get_cursor(dictionary=False):
         connection.close()
 
 
+@contextmanager
+def get_transaction():
+    """Explicit multi-statement atomic transaction."""
+    connection = create_connection()
+    cursor = connection.cursor()
+    try:
+        connection.begin()
+        yield cursor
+        connection.commit()
+    except Exception:
+        connection.rollback()
+        raise
+    finally:
+        cursor.close()
+        connection.close()
+
+
 def initialize_schema():
-    """Apply schema.sql (every statement is idempotent).
-
-    When an explicit database name is configured (hosted MySQL), the
-    connection selects it directly and the file's CREATE DATABASE / USE
-    provisioning statements are skipped so any database name works.
-    """
-    raw_lines = SCHEMA_PATH.read_text(encoding="utf-8").splitlines()
-    # Drop comment lines so statement splitting on ';' stays trivial.
-    cleaned = "\n".join(line for line in raw_lines if not line.lstrip().startswith("--"))
-
-    use_explicit_database = database_name_is_explicit()
-    if use_explicit_database:
-        provisioned = []
-        for statement in cleaned.split(";"):
-            head = statement.strip().split("\n", 1)[0].strip().upper()
-            if head.startswith("CREATE DATABASE") or head.startswith("USE "):
-                continue
-            provisioned.append(statement)
-        cleaned = ";".join(provisioned)
-
-    # With an explicitly configured database we select it directly in the
-    # connection; otherwise (local defaults) connect without one and let the
-    # file's CREATE DATABASE / USE statements provision market_dna.
-    connection = create_connection(use_database=use_explicit_database)
+    """Apply schema.sql (every statement is idempotent)."""
+    cleaned = "\n".join(
+        line for line in SCHEMA_PATH.read_text(encoding="utf-8").splitlines()
+        if not line.lstrip().startswith("--")
+    )
+    connection = create_connection()
     cursor = connection.cursor()
     try:
         for statement in cleaned.split(";"):
             if statement.strip():
                 cursor.execute(statement)
         connection.commit()
-    except MySQLError as exc:
+    except DatabaseError as exc:
         raise DatabaseError(f"Could not initialize schema: {exc}") from exc
     finally:
         cursor.close()
         connection.close()
 
-    _migrate_price_data_unique()
-
 
 def _migrate_price_data_unique():
-    """v0.10 migration: enforce one row per (dataset_id, date).
-
-    Older installs created price_data with a plain (dataset_id, date) index.
-    Deduplicate any existing repeats, then add the unique index. Safe to run
-    on every startup.
-    """
-    dedupe = """
-        DELETE p1 FROM price_data p1
-        JOIN price_data p2
-          ON p1.dataset_id = p2.dataset_id
-         AND p1.date = p2.date
-         AND p1.id > p2.id
-    """
-    add_index = (
-        "ALTER TABLE price_data "
-        "ADD UNIQUE INDEX uq_price_data_dataset_date (dataset_id, date)"
-    )
-    connection = create_connection()
-    cursor = connection.cursor()
-    try:
-        cursor.execute(dedupe)
-        connection.commit()
-        try:
-            cursor.execute(add_index)
-            connection.commit()
-        except MySQLError as exc:
-            # 1061 duplicate key name -> index already present.
-            if exc.errno != 1061:
-                raise
-    except MySQLError as exc:
-        connection.rollback()
-        raise DatabaseError(f"price_data unique-index migration failed: {exc}") from exc
-    finally:
-        cursor.close()
-        connection.close()
+    """Historical MySQL migration — the unique constraint ships with the
+    libSQL schema, so nothing to migrate. Kept for call-site stability."""
+    return None
 
 
 def _to_json_value(value):
-    """Convert MySQL-native types into JSON-safe Python types."""
+    """Convert driver-native types into JSON-safe Python types."""
     if isinstance(value, Decimal):
         return float(value)
-    if isinstance(value, (date, datetime)):
-        return value.isoformat()
+    if isinstance(value, bytes):
+        return value.decode("utf-8", errors="replace")
     return value
 
 
+def _parse_date(value):
+    if value in (None, ""):
+        return None
+    if isinstance(value, date):
+        return value
+    return date.fromisoformat(str(value)[:10])
+
+
+# ---------------------------------------------------------------------------
+# Datasets
+# ---------------------------------------------------------------------------
+
 _PRICE_INSERT = """
-INSERT INTO price_data (dataset_id, date, `open`, high, low, close, volume)
+INSERT INTO price_data (dataset_id, date, "open", high, low, close, volume)
+VALUES (%s, %s, %s, %s, %s, %s, %s)
+"""
+
+_PRICE_INSERT_IGNORE = """
+INSERT OR IGNORE INTO price_data
+    (dataset_id, date, "open", high, low, close, volume)
 VALUES (%s, %s, %s, %s, %s, %s, %s)
 """
 
@@ -247,7 +435,9 @@ def store_dataset(filename, start_date, end_date, row_count, latest_close, price
     """Persist dataset metadata, all OHLCV rows and metrics atomically."""
     connection = create_connection()
     cursor = connection.cursor()
+    dataset_id = None
     try:
+        connection.begin()
         cursor.execute(
             """
             INSERT INTO datasets (filename, start_date, end_date, row_count, latest_close)
@@ -256,22 +446,28 @@ def store_dataset(filename, start_date, end_date, row_count, latest_close, price
             (filename, start_date, end_date, row_count, latest_close),
         )
         dataset_id = cursor.lastrowid
+        if not dataset_id and cursor.returned_rows:
+            dataset_id = cursor.returned_rows[0][0]
 
         if price_rows:
-            cursor.executemany(
-                _PRICE_INSERT,
-                [(dataset_id, *row) for row in price_rows],
-            )
+            for row in price_rows:
+                cursor.execute(_PRICE_INSERT, (dataset_id, *row))
         if metrics:
-            cursor.executemany(
-                _METRIC_INSERT,
-                [(dataset_id, name, value) for name, value in metrics.items()],
-            )
+            for name, value in metrics.items():
+                cursor.execute(_METRIC_INSERT, (dataset_id, name, value))
 
         connection.commit()
         return dataset_id
-    except MySQLError as exc:
+    except Exception as exc:
         connection.rollback()
+        # Compensating cleanup for transports without server-side
+        # transactions (http(s) remotes): never leave an empty registry row.
+        if dataset_id is not None:
+            try:
+                connection.execute("DELETE FROM datasets WHERE id = %s", (dataset_id,))
+                connection.commit()
+            except Exception:
+                pass
         raise DatabaseError(f"Failed to persist dataset '{filename}': {exc}") from exc
     finally:
         cursor.close()
@@ -340,31 +536,34 @@ def get_prices(dataset_id):
     with get_cursor(dictionary=True) as cursor:
         cursor.execute(
             """
-            SELECT date, `open`, high, low, close, volume
+            SELECT date, "open", high, low, close, volume
             FROM price_data
             WHERE dataset_id = %s
             ORDER BY date
             """,
             (dataset_id,),
         )
-        return [
-            {
-                "date": record["date"].isoformat(),
-                "open": float(record["open"]),
-                "high": float(record["high"]),
-                "low": float(record["low"]),
-                "close": float(record["close"]),
-                "volume": int(record["volume"]),
-            }
-            for record in cursor.fetchall()
-        ]
+        records = cursor.fetchall()
+    return [
+        {
+            "date": str(record["date"]),
+            "open": float(record["open"]),
+            "high": float(record["high"]),
+            "low": float(record["low"]),
+            "close": float(record["close"]),
+            "volume": int(record["volume"]),
+        }
+        for record in records
+    ]
 
 
 def delete_dataset(dataset_id):
     """Delete a dataset; children are removed by ON DELETE CASCADE."""
     with get_cursor() as cursor:
-        cursor.execute("DELETE FROM datasets WHERE id = %s", (dataset_id,))
-        return cursor.rowcount > 0
+        cursor.execute(
+            "DELETE FROM datasets WHERE id = %s RETURNING id", (dataset_id,)
+        )
+        return len(cursor.returned_rows) > 0
 
 
 # ---------------------------------------------------------------------------
@@ -390,24 +589,19 @@ def upsert_dataset_source(
                 (dataset_id, provider, symbol, instrument_name, exchange,
                  asset_type, currency, price_interval)
             VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
-            ON DUPLICATE KEY UPDATE
-                provider = VALUES(provider),
-                symbol = VALUES(symbol),
-                instrument_name = VALUES(instrument_name),
-                exchange = VALUES(exchange),
-                asset_type = VALUES(asset_type),
-                currency = VALUES(currency),
-                price_interval = VALUES(price_interval)
+            ON CONFLICT(dataset_id) DO UPDATE SET
+                provider = excluded.provider,
+                symbol = excluded.symbol,
+                instrument_name = excluded.instrument_name,
+                exchange = excluded.exchange,
+                asset_type = excluded.asset_type,
+                currency = excluded.currency,
+                price_interval = excluded.price_interval,
+                last_updated = CURRENT_TIMESTAMP
             """,
             (
-                dataset_id,
-                provider,
-                symbol,
-                instrument_name,
-                exchange,
-                asset_type,
-                currency,
-                price_interval,
+                dataset_id, provider, symbol, instrument_name, exchange,
+                asset_type, currency, price_interval,
             ),
         )
 
@@ -450,28 +644,13 @@ def append_price_rows(dataset_id, price_rows):
     """
     if not price_rows:
         return 0
-    connection = create_connection()
-    cursor = connection.cursor()
-    try:
+    with get_transaction() as cursor:
         inserted = 0
         for row in price_rows:
-            cursor.execute(
-                """
-                INSERT IGNORE INTO price_data
-                    (dataset_id, date, `open`, high, low, close, volume)
-                VALUES (%s, %s, %s, %s, %s, %s, %s)
-                """,
-                (dataset_id, *row),
-            )
-            inserted += cursor.rowcount
-        connection.commit()
+            cursor.execute(_PRICE_INSERT_IGNORE + " RETURNING 1",
+                           (dataset_id, *row))
+            inserted += len(cursor.returned_rows)
         return inserted
-    except MySQLError as exc:
-        connection.rollback()
-        raise DatabaseError(f"Failed to append price rows: {exc}") from exc
-    finally:
-        cursor.close()
-        connection.close()
 
 
 def replace_price_rows_from(dataset_id, price_rows, start_date):
@@ -479,46 +658,30 @@ def replace_price_rows_from(dataset_id, price_rows, start_date):
 
     Transactional delete+insert used by incremental updates so a previously
     stored provisional (intraday) session bar is corrected instead of frozen.
-    Returns ``{"added": net_new_rows, "replaced": deleted_rows}`` where
-    ``added`` is the net change relative to the previous state (0 means the
-    content did not effectively change) and ``replaced`` counts stored rows
-    that were removed from the overlap window and rewritten.
+    Returns ``{"added": net_new_rows, "replaced": deleted_rows}``.
     """
-    connection = create_connection()
-    cursor = connection.cursor()
-    try:
+    with get_transaction() as cursor:
         cursor.execute(
-            "SELECT COUNT(*) FROM price_data WHERE dataset_id = %s",
+            "SELECT COUNT(*) AS n FROM price_data WHERE dataset_id = %s",
             (dataset_id,),
         )
-        before = cursor.fetchone()[0]
+        before = int(cursor.fetchone()[0])
         cursor.execute(
-            "DELETE FROM price_data WHERE dataset_id = %s AND date >= %s",
+            "DELETE FROM price_data WHERE dataset_id = %s AND date >= %s "
+            "RETURNING date",
             (dataset_id, start_date),
         )
-        replaced = cursor.rowcount
+        replaced = len(cursor.returned_rows)
+        # OR IGNORE: provider batches can contain internal duplicate dates
+        # (e.g. an unchanged boundary session fetched twice).
         for row in price_rows:
-            cursor.execute(
-                """
-                INSERT IGNORE INTO price_data
-                    (dataset_id, date, `open`, high, low, close, volume)
-                VALUES (%s, %s, %s, %s, %s, %s, %s)
-                """,
-                (dataset_id, *row),
-            )
+            cursor.execute(_PRICE_INSERT_IGNORE, (dataset_id, *row))
         cursor.execute(
-            "SELECT COUNT(*) FROM price_data WHERE dataset_id = %s",
+            "SELECT COUNT(*) AS n FROM price_data WHERE dataset_id = %s",
             (dataset_id,),
         )
-        after = cursor.fetchone()[0]
-        connection.commit()
+        after = int(cursor.fetchone()[0])
         return {"added": after - before, "replaced": replaced}
-    except MySQLError as exc:
-        connection.rollback()
-        raise DatabaseError(f"Failed to replace price rows: {exc}") from exc
-    finally:
-        cursor.close()
-        connection.close()
 
 
 def get_last_price_date(dataset_id):
@@ -529,8 +692,7 @@ def get_last_price_date(dataset_id):
             (dataset_id,),
         )
         row = cursor.fetchone()
-    value = row["last_date"] if row else None
-    return value.date() if isinstance(value, datetime) else value
+    return _parse_date(row["last_date"]) if row else None
 
 
 def update_dataset_metadata(dataset_id, end_date, row_count, latest_close):
@@ -541,22 +703,16 @@ def update_dataset_metadata(dataset_id, end_date, row_count, latest_close):
             UPDATE datasets
             SET end_date = %s, row_count = %s, latest_close = %s
             WHERE id = %s
+            RETURNING id
             """,
             (end_date, row_count, latest_close, dataset_id),
         )
-        return cursor.rowcount > 0
+        return len(cursor.returned_rows) > 0
 
 
 def delete_analysis_caches(dataset_id):
-    """Drop every derived-analysis cache for a dataset after data changed.
-
-    Fingerprints, analogue matches and regime models are recomputed lazily on
-    the next request; intelligence snapshots are parameter-hash keyed and are
-    invalidated by deleting them outright.
-    """
-    connection = create_connection()
-    cursor = connection.cursor()
-    try:
+    """Drop every derived-analysis cache for a dataset after data changed."""
+    with get_transaction() as cursor:
         cursor.execute("DELETE FROM fingerprints WHERE dataset_id = %s", (dataset_id,))
         cursor.execute(
             "DELETE FROM analogue_matches WHERE dataset_id = %s", (dataset_id,)
@@ -570,43 +726,26 @@ def delete_analysis_caches(dataset_id):
         cursor.execute(
             "DELETE FROM intelligence_snapshots WHERE dataset_id = %s", (dataset_id,)
         )
-        connection.commit()
-    except MySQLError as exc:
-        connection.rollback()
-        raise DatabaseError(f"Failed to invalidate caches: {exc}") from exc
-    finally:
-        cursor.close()
-        connection.close()
 
 
 def store_fingerprint(dataset_id, metrics):
     """Replace the stored fingerprint of a dataset with a fresh one."""
-    connection = create_connection()
-    cursor = connection.cursor()
-    try:
+    with get_transaction() as cursor:
         cursor.execute("DELETE FROM fingerprints WHERE dataset_id = %s", (dataset_id,))
-        # metric_value is a DOUBLE column: persist numbers and nulls only;
-        # categorical entries (e.g. ma20_ma50_relationship) stay API-only.
         numeric_rows = [
             (dataset_id, name, value)
             for name, value in metrics.items()
             if value is None or isinstance(value, (int, float))
         ]
         if numeric_rows:
-            cursor.executemany(
-                """
-                INSERT INTO fingerprints (dataset_id, metric_name, metric_value)
-                VALUES (%s, %s, %s)
-                """,
-                numeric_rows,
-            )
-        connection.commit()
-    except MySQLError as exc:
-        connection.rollback()
-        raise DatabaseError(f"Failed to store fingerprint for dataset {dataset_id}: {exc}") from exc
-    finally:
-        cursor.close()
-        connection.close()
+            for dataset, name, value in numeric_rows:
+                cursor.execute(
+                    """
+                    INSERT INTO fingerprints (dataset_id, metric_name, metric_value)
+                    VALUES (%s, %s, %s)
+                    """,
+                    (dataset, name, value),
+                )
 
 
 def get_stored_fingerprint(dataset_id):
@@ -629,9 +768,7 @@ def get_stored_fingerprint(dataset_id):
 
 def store_analogues(dataset_id, analogues):
     """Replace stored analogue matches for a dataset (details kept as JSON)."""
-    connection = create_connection()
-    cursor = connection.cursor()
-    try:
+    with get_transaction() as cursor:
         cursor.execute(
             "DELETE FROM analogue_matches WHERE dataset_id = %s", (dataset_id,)
         )
@@ -648,23 +785,17 @@ def store_analogues(dataset_id, analogues):
             for analogue in analogues
         ]
         if rows:
-            cursor.executemany(
-                """
-                INSERT INTO analogue_matches
-                    (dataset_id, match_rank, start_date, end_date,
-                     distance, similarity, details)
-                VALUES (%s, %s, %s, %s, %s, %s, %s)
-                """,
-                rows,
-            )
-        connection.commit()
+            for row in rows:
+                cursor.execute(
+                    """
+                    INSERT INTO analogue_matches
+                        (dataset_id, match_rank, start_date, end_date,
+                         distance, similarity, details)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s)
+                    """,
+                    row,
+                )
         return len(rows)
-    except MySQLError as exc:
-        connection.rollback()
-        raise DatabaseError(f"Failed to store analogues for dataset {dataset_id}: {exc}") from exc
-    finally:
-        cursor.close()
-        connection.close()
 
 
 def get_stored_analogues(dataset_id):
@@ -698,15 +829,8 @@ def get_stored_analogues(dataset_id):
 
 
 def store_regime_model(dataset_id, summary, assignments):
-    """Persist the latest regime model of a dataset (previous one replaced).
-
-    `summary` is stored as JSON so results can be reproduced/displayed
-    without duplicating OHLCV rows; `assignments` rows carry per-window
-    regime labels, distances, confidences and PCA coordinates.
-    """
-    connection = create_connection()
-    cursor = connection.cursor()
-    try:
+    """Persist the latest regime model of a dataset (previous one replaced)."""
+    with get_transaction() as cursor:
         cursor.execute("DELETE FROM regime_models WHERE dataset_id = %s", (dataset_id,))
         meta = summary.get("model", {})
         pca_meta = summary.get("pca", {})
@@ -718,6 +842,7 @@ def store_regime_model(dataset_id, summary, assignments):
                  n_windows, silhouette, davies_bouldin, pca_components,
                  cumulative_explained_variance, model_json)
             VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+            RETURNING id
             """,
             (
                 dataset_id,
@@ -733,17 +858,17 @@ def store_regime_model(dataset_id, summary, assignments):
                 json.dumps(summary, default=str),
             ),
         )
-        model_id = cursor.lastrowid
+        model_id = cursor.returned_rows[0][0]
 
         if assignments:
-            cursor.executemany(
-                """
-                INSERT INTO regime_assignments
-                    (model_id, window_start, window_end, window_end_index,
-                     regime_id, distance_to_centroid, confidence, pca_coordinates)
-                VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
-                """,
-                [
+            for entry in assignments:
+                cursor.execute(
+                    """
+                    INSERT INTO regime_assignments
+                        (model_id, window_start, window_end, window_end_index,
+                         regime_id, distance_to_centroid, confidence, pca_coordinates)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+                    """,
                     (
                         model_id,
                         entry["start_date"],
@@ -753,18 +878,9 @@ def store_regime_model(dataset_id, summary, assignments):
                         entry.get("distance_to_centroid"),
                         entry.get("confidence"),
                         json.dumps(entry.get("pca_coordinates"), default=str),
-                    )
-                    for entry in assignments
-                ],
-            )
-        connection.commit()
+                    ),
+                )
         return model_id
-    except MySQLError as exc:
-        connection.rollback()
-        raise DatabaseError(f"Failed to store regime model for dataset {dataset_id}: {exc}") from exc
-    finally:
-        cursor.close()
-        connection.close()
 
 
 def get_stored_regime_model(dataset_id):
@@ -825,12 +941,7 @@ def intelligence_param_hash(parameters):
 
 
 def get_cached_intelligence(dataset_id, param_hash):
-    """Return a reusable intelligence snapshot for identical parameters.
-
-    A snapshot is only valid while the dataset's latest market date still
-    matches the one it was generated from; new uploads naturally invalidate
-    cached results because they receive a new dataset id or end date.
-    """
+    """Return a reusable intelligence snapshot for identical parameters."""
     with get_cursor(dictionary=True) as cursor:
         cursor.execute(
             """
@@ -857,9 +968,7 @@ def get_cached_intelligence(dataset_id, param_hash):
 
 def store_intelligence_snapshot(dataset_id, latest_market_date, param_hash, parameters, intelligence):
     """Insert (or replace) the intelligence snapshot for one configuration."""
-    connection = create_connection()
-    cursor = connection.cursor()
-    try:
+    with get_transaction() as cursor:
         cursor.execute(
             """
             DELETE FROM intelligence_snapshots
@@ -872,6 +981,7 @@ def store_intelligence_snapshot(dataset_id, latest_market_date, param_hash, para
             INSERT INTO intelligence_snapshots
                 (dataset_id, latest_market_date, param_hash, parameters, intelligence)
             VALUES (%s, %s, %s, %s, %s)
+            RETURNING id
             """,
             (
                 dataset_id,
@@ -881,14 +991,7 @@ def store_intelligence_snapshot(dataset_id, latest_market_date, param_hash, para
                 json.dumps(intelligence, default=str),
             ),
         )
-        connection.commit()
-        return cursor.lastrowid
-    except MySQLError as exc:
-        connection.rollback()
-        raise DatabaseError(f"Failed to store intelligence snapshot for dataset {dataset_id}: {exc}") from exc
-    finally:
-        cursor.close()
-        connection.close()
+        return cursor.returned_rows[0][0]
 
 
 # ---------------------------------------------------------------------------
@@ -921,15 +1024,16 @@ FROM comparison_presets
 
 def create_comparison_preset(name, dataset_ids):
     """Persist a new saved comparison selection and return it."""
-    with get_cursor(dictionary=True) as cursor:
+    with get_cursor() as cursor:
         cursor.execute(
             """
             INSERT INTO comparison_presets (name, dataset_ids)
             VALUES (%s, %s)
+            RETURNING id
             """,
             (name, json.dumps([int(i) for i in dataset_ids])),
         )
-        preset_id = cursor.lastrowid
+        preset_id = cursor.returned_rows[0][0]
     return get_comparison_preset(preset_id)
 
 
@@ -949,11 +1053,8 @@ def get_comparison_preset(preset_id):
 
 
 def update_comparison_preset(preset_id, name=None, dataset_ids=None):
-    """Update a preset's name and/or dataset selection.
-
-    Returns the refreshed preset, or None when the id does not exist.
-    """
-    assignments = []
+    """Update a preset's name and/or dataset selection."""
+    assignments = ["updated_at = CURRENT_TIMESTAMP"]
     values = []
     if name is not None:
         assignments.append("name = %s")
@@ -961,16 +1062,15 @@ def update_comparison_preset(preset_id, name=None, dataset_ids=None):
     if dataset_ids is not None:
         assignments.append("dataset_ids = %s")
         values.append(json.dumps([int(i) for i in dataset_ids]))
-    if not assignments:
-        return get_comparison_preset(preset_id)
 
     values.append(preset_id)
-    with get_cursor(dictionary=True) as cursor:
+    with get_cursor() as cursor:
         cursor.execute(
-            f"UPDATE comparison_presets SET {', '.join(assignments)} WHERE id = %s",
+            f"UPDATE comparison_presets SET {', '.join(assignments)} "
+            "WHERE id = %s RETURNING id",
             tuple(values),
         )
-        if cursor.rowcount == 0:
+        if not cursor.returned_rows:
             return None
     return get_comparison_preset(preset_id)
 
@@ -978,8 +1078,11 @@ def update_comparison_preset(preset_id, name=None, dataset_ids=None):
 def delete_comparison_preset(preset_id):
     """Delete a preset; returns True when a row was removed."""
     with get_cursor() as cursor:
-        cursor.execute("DELETE FROM comparison_presets WHERE id = %s", (preset_id,))
-        return cursor.rowcount > 0
+        cursor.execute(
+            "DELETE FROM comparison_presets WHERE id = %s RETURNING id",
+            (preset_id,),
+        )
+        return len(cursor.returned_rows) > 0
 
 
 # ---------------------------------------------------------------------------
@@ -988,9 +1091,9 @@ def delete_comparison_preset(preset_id):
 
 
 def upsert_ingestion_job(job):
-    """Mirror an ingestion-job snapshot so status polls survive instance
-    changes on serverless platforms. Best-effort by design (caller wraps)."""
-    result_json = json.dumps(job.get("result"), default=str) if job.get("result") is not None else None
+    """Mirror an ingestion-job snapshot so status polls survive restarts."""
+    result_json = (json.dumps(job.get("result"), default=str)
+                   if job.get("result") is not None else None)
     with get_cursor() as cursor:
         cursor.execute(
             """
@@ -998,24 +1101,20 @@ def upsert_ingestion_job(job):
                 (job_id, symbol, provider, status, stage, observations,
                  result_json, error)
             VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
-            ON DUPLICATE KEY UPDATE
-                symbol = VALUES(symbol),
-                provider = VALUES(provider),
-                status = VALUES(status),
-                stage = VALUES(stage),
-                observations = VALUES(observations),
-                result_json = VALUES(result_json),
-                error = VALUES(error)
+            ON CONFLICT(job_id) DO UPDATE SET
+                symbol = excluded.symbol,
+                provider = excluded.provider,
+                status = excluded.status,
+                stage = excluded.stage,
+                observations = excluded.observations,
+                result_json = excluded.result_json,
+                error = excluded.error,
+                updated_at = CURRENT_TIMESTAMP
             """,
             (
-                job["job_id"],
-                job.get("symbol"),
-                job.get("provider"),
-                job["status"],
-                job["stage"],
-                job.get("observations"),
-                result_json,
-                job.get("error"),
+                job["job_id"], job.get("symbol"), job.get("provider"),
+                job["status"], job["stage"], job.get("observations"),
+                result_json, job.get("error"),
             ),
         )
 

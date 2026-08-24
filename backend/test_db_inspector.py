@@ -1,10 +1,14 @@
-﻿"""v0.11.0 Database Inspector tests.
+"""v0.11.0 Database Inspector tests.
 
 Covers the read-only /database/* surface: whitelisting, schema introspection,
 bounded pagination, validated filtering/sorting, statistics, per-dataset
 storage breakdown, integrity checks and the absence of any SQL-execution
 endpoint. Uses the real MySQL database (same convention as the other suites).
 """
+
+import io
+import os
+import sys
 
 from fastapi.testclient import TestClient
 
@@ -27,11 +31,32 @@ def check(name, condition, detail=""):
         print(f"  FAIL  {name} :: {detail}")
 
 
+def _ensure_seeded():
+    """Fresh libSQL databases start empty — seed one synthetic dataset so
+    statistics/pagination checks have real rows to inspect."""
+    if db_inspector.get_database_stats()["datasets"] > 0:
+        return
+    sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+    from test_fingerprint import build_synthetic_ohlcv
+
+    csv_bytes = build_synthetic_ohlcv().to_csv(index=False).encode()
+    with TestClient(app) as client:
+        _ts.login(client)
+        r = client.post(
+            "/upload",
+            files={"file": ("inspector_seed.csv",
+                            io.BytesIO(csv_bytes), "text/csv")},
+        )
+        assert r.status_code == 200, r.text[:200]
+
+
 def test_unit_level():
     print("\n[1] status + tables + stats")
+    _ensure_seeded()
     status = db_inspector.get_status()
     check("status connected", status["connected"] is True)
-    check("status names database", status["database"] == "market_dna", str(status))
+    check("status names database", bool(status["database"])
+          and "libsql" in str(status["database"]).lower(), str(status))
     check("status counts tables", status["tables_count"] >= 10)
 
     tables = db_inspector.list_tables()
@@ -69,7 +94,9 @@ def test_unit_level():
     fks = {(f["column"], f["references_table"]) for f in schema["foreign_keys"]}
     check("fk to datasets visible", ("dataset_id", "datasets") in fks, str(fks))
     col_types = {c["name"]: c["type"] for c in schema["columns"]}
-    check("decimal prices exposed", "decimal" in col_types.get("close", ""),
+    check("decimal prices exposed",
+          any(t in col_types.get("close", "").upper()
+              for t in ("DECIMAL", "REAL", "NUMERIC")),
           str(col_types.get("close")))
 
     try:

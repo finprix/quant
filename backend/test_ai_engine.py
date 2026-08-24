@@ -64,6 +64,28 @@ def test_prompt_persona():
     check("grounding rule intact", "ONLY numbers present in the context" in prompt)
 
 
+def _seed_dataset():
+    """Upload a synthetic dataset and return its id (fresh DBs are empty)."""
+    import io
+    import sys as _sys
+
+    _sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+    import test_support as _ts  # noqa: E402  (must precede main import)
+    from fastapi.testclient import TestClient  # noqa: E402
+    from main import app  # noqa: E402
+    from test_fingerprint import build_synthetic_ohlcv  # noqa: E402
+
+    with TestClient(app) as client:
+        _ts.login(client)
+        csv_bytes = build_synthetic_ohlcv().to_csv(index=False).encode()
+        r = client.post(
+            "/upload",
+            files={"file": ("ai_seed.csv", io.BytesIO(csv_bytes), "text/csv")},
+        )
+        assert r.status_code == 200, r.text[:200]
+        return r.json()["dataset"]["id"]
+
+
 def test_provider_masking():
     print("\n[2] provider masking in status + answers")
     _set_ai_env()
@@ -77,7 +99,8 @@ def test_provider_masking():
         check("status hides provider/model",
               "provider" not in status and "model" not in status)
 
-        context, tools = ai_engine.build_market_context(166)
+        seed_id = _seed_dataset()
+        context, tools = ai_engine.build_market_context(seed_id)
         series = context.get("price_series") or {}
         check("price_series available for seeded dataset", series.get("available") is True)
         check(
@@ -94,7 +117,7 @@ def test_provider_masking():
             "| A | B |\n| --- | --- |\n| 1 | 2 |"
         )
         try:
-            payload = ai_engine.answer_market_question("test question", 166)
+            payload = ai_engine.answer_market_question("test question", seed_id)
         finally:
             ai_engine._call_llm = original_call
         check("answer path available", payload.get("available") is True)

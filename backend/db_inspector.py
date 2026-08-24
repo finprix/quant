@@ -1,12 +1,12 @@
-"""Read-only MySQL inspector backing the DATABASE page (v0.11.0).
+"""Read-only database inspector backing the DATABASE page (v0.11.0).
 
 Security model:
   - table names must be members of TABLE_WHITELIST,
-  - column identifiers are resolved against information_schema for the
+  - column identifiers are resolved against PRAGMA introspection for the
     whitelisted table before being quoted into SQL,
   - every value is bound as a parameter — never interpolated,
   - pagination is bounded (MAX_PAGE_LIMIT),
-  - only SELECT / SHOW / information_schema reads are ever issued.
+  - only SELECT / PRAGMA reads are ever issued.
 
 This module is an inspector, not a SQL console: the structured browsing
 endpoints never accept caller-supplied SQL. A separate, tightly fenced
@@ -16,16 +16,18 @@ see its guardrail list above it.
 
 import re
 import time
+from pathlib import Path
 
 from database import (
     DatabaseError,
     create_connection,
+    get_config,
     get_cursor,
 )
 
 MAX_PAGE_LIMIT = 500
 
-# The real Quant Vector tables (verified against schema.sql + information_schema).
+# The real Quant Vector tables (verified against schema.sql + PRAGMA introspection).
 TABLE_WHITELIST = {
     "datasets": {"category": "raw", "label": "Dataset registry"},
     "price_data": {"category": "raw", "label": "OHLCV observations"},
@@ -68,20 +70,25 @@ def get_status():
     """Cheap connectivity probe with latency. Never raises for offline DB."""
     started = time.perf_counter()
     try:
+        config = get_config()
+        if config["mode"] == "turso":
+            db_label = config["url"].split("//")[-1].split(".")[0].split("/")[0]
+        else:
+            db_label = Path(str(config["path"])).stem
         with get_cursor(dictionary=True) as cursor:
-            cursor.execute("SELECT DATABASE() AS db, VERSION() AS ver")
+            cursor.execute("SELECT sqlite_version() AS ver")
             row = cursor.fetchone()
             cursor.execute(
                 """
-                SELECT COUNT(*) AS n FROM information_schema.TABLES
-                WHERE TABLE_SCHEMA = DATABASE()
+                SELECT COUNT(*) AS n FROM sqlite_master
+                WHERE type = 'table' AND name NOT LIKE 'sqlite_%'
                 """
             )
             tables = cursor.fetchone()["n"]
         latency_ms = round((time.perf_counter() - started) * 1000, 1)
         return {
             "connected": True,
-            "database": row["db"],
+            "database": f"{db_label} (libSQL)",
             "server_version": row["ver"],
             "latency_ms": latency_ms,
             "tables_count": int(tables),
@@ -119,16 +126,11 @@ def list_tables():
 
 
 def _table_columns(cursor, table):
-    """Column names of a whitelisted table, from information_schema."""
+    """Column names of a whitelisted table, from PRAGMA table_info."""
     cursor.execute(
-        """
-        SELECT COLUMN_NAME FROM information_schema.COLUMNS
-        WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = %s
-        ORDER BY ORDINAL_POSITION
-        """,
-        (table,),
+        f"PRAGMA table_info({_quote_ident(table)})"
     )
-    return [row["COLUMN_NAME"] for row in cursor.fetchall()]
+    return [row["name"] for row in cursor.fetchall()]
 
 
 def get_table_schema(table):
@@ -136,51 +138,40 @@ def get_table_schema(table):
     if table not in TABLE_WHITELIST:
         raise UnknownTable(f"Unknown table '{table}'.")
     with get_cursor(dictionary=True) as cursor:
-        cursor.execute(
-            """
-            SELECT COLUMN_NAME, COLUMN_TYPE, IS_NULLABLE, COLUMN_KEY,
-                   COLUMN_DEFAULT, EXTRA
-            FROM information_schema.COLUMNS
-            WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = %s
-            ORDER BY ORDINAL_POSITION
-            """,
-            (table,),
+        cursor.execute(f"PRAGMA table_info({_quote_ident(table)})")
+        info_rows = cursor.fetchall()
+        pk_parts = sorted(
+            ((r["pk"], r["name"]) for r in info_rows if r["pk"]),
         )
+        primary_key = [name for _, name in pk_parts]
         columns = [
             {
-                "name": c["COLUMN_NAME"],
-                "type": c["COLUMN_TYPE"],
-                "nullable": c["IS_NULLABLE"] == "YES",
-                "key": c["COLUMN_KEY"] or None,
-                "default": None if c["COLUMN_DEFAULT"] is None
-                else str(c["COLUMN_DEFAULT"]),
-                "extra": c["EXTRA"] or None,
+                "name": c["name"],
+                "type": (c["type"] or "TEXT").upper(),
+                "nullable": not c["notnull"] and not c["pk"],
+                "key": "PRI" if c["pk"] else None,
+                "default": None if c["dflt_value"] is None
+                else str(c["dflt_value"]),
+                "extra": "autoincrement" if c["pk"] == 1
+                and (c["type"] or "").upper() == "INTEGER" else None,
             }
-            for c in cursor.fetchall()
+            for c in info_rows
         ]
-        cursor.execute(
-            """
-            SELECT INDEX_NAME, NON_UNIQUE,
-                   GROUP_CONCAT(COLUMN_NAME ORDER BY SEQ_IN_INDEX) AS cols
-            FROM information_schema.STATISTICS
-            WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = %s
-            GROUP BY INDEX_NAME, NON_UNIQUE
-            """,
-            (table,),
-        )
+        cursor.execute(f"PRAGMA index_list({_quote_ident(table)})")
+        index_meta = cursor.fetchall()
         indexes = []
-        for idx in cursor.fetchall():
-            index_cols = idx["cols"].split(",")
+        for idx in index_meta:
+            cursor.execute(
+                f"PRAGMA index_info({_quote_ident(idx['name'])})"
+            )
+            index_cols = [r["name"] for r in cursor.fetchall()]
             entry = {
-                "name": idx["INDEX_NAME"],
+                "name": idx["name"],
                 "columns": index_cols,
-                "unique": idx["NON_UNIQUE"] == 0,
-                "primary": idx["INDEX_NAME"] == "PRIMARY",
+                "unique": bool(idx["unique"]),
+                "primary": idx.get("origin") == "pk",
             }
             indexes.append(entry)
-        primary_key = next(
-            (e["columns"] for e in indexes if e["primary"]), []
-        )
         uniques = [
             {"name": e["name"], "columns": e["columns"]}
             for e in indexes if e["unique"] and not e["primary"]
@@ -189,24 +180,15 @@ def get_table_schema(table):
             {"name": e["name"], "columns": e["columns"]}
             for e in indexes if not e["unique"] and not e["primary"]
         ]
-        cursor.execute(
-            """
-            SELECT CONSTRAINT_NAME, COLUMN_NAME,
-                   REFERENCED_TABLE_NAME, REFERENCED_COLUMN_NAME
-            FROM information_schema.KEY_COLUMN_USAGE
-            WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = %s
-              AND REFERENCED_TABLE_NAME IS NOT NULL
-            """,
-            (table,),
-        )
+        cursor.execute(f"PRAGMA foreign_key_list({_quote_ident(table)})")
         foreign_keys = [
             {
-                "name": fk["CONSTRAINT_NAME"],
-                "column": fk["COLUMN_NAME"],
-                "references_table": fk["REFERENCED_TABLE_NAME"],
-                "references_column": fk["REFERENCED_COLUMN_NAME"],
+                "name": fk_row["from"] + "_" + fk_row["table"] + "_fk",
+                "column": fk_row["from"],
+                "references_table": fk_row["table"],
+                "references_column": fk_row["to"] or "id",
             }
-            for fk in cursor.fetchall()
+            for fk_row in cursor.fetchall()
         ]
     return {
         "table": table,
@@ -346,6 +328,16 @@ def get_table_rows(table, limit=100, offset=0, filters=None,
     }
 
 
+def _iso(value):
+    """Driver-neutral ISO formatting for dates/timestamps."""
+    import datetime as _dt
+    if isinstance(value, _dt.datetime):
+        return value.isoformat(sep=" ")
+    if isinstance(value, _dt.date):
+        return value.isoformat()
+    return str(value) if value is not None else None
+
+
 def get_database_stats():
     """DBMS-level statistics for the overview strip."""
     with get_cursor(dictionary=True) as cursor:
@@ -359,26 +351,28 @@ def get_database_stats():
         span = cursor.fetchone()
         cursor.execute("SELECT COUNT(*) AS n FROM price_data")
         price_rows = int(cursor.fetchone()["n"])
-        cursor.execute(
-            """
-            SELECT SUM(data_length + index_length) AS bytes
-            FROM information_schema.TABLES
-            WHERE TABLE_SCHEMA = DATABASE()
-            """
-        )
-        size_bytes = int(cursor.fetchone()["bytes"] or 0)
+        size_bytes = 0
+        try:
+            cursor.execute("PRAGMA page_count")
+            page_count = int(cursor.fetchone()["page_count"])
+            cursor.execute("PRAGMA page_size")
+            page_size = int(cursor.fetchone()["page_size"])
+            size_bytes = page_count * page_size
+        except DatabaseError:
+            pass
     return {
         "datasets": datasets,
         "market_imports": imports,
         "csv_imports": datasets - imports,
         "price_observations": price_rows,
-        "oldest_observation": span["oldest"].isoformat()
-        if span["oldest"] else None,
-        "newest_observation": span["newest"].isoformat()
-        if span["newest"] else None,
+        "oldest_observation": _iso(span["oldest"]),
+        "newest_observation": _iso(span["newest"]),
         "size_bytes": size_bytes,
-        "size_pretty": f"{size_bytes / 1024:.1f} KiB"
-        if size_bytes < 1024 * 1024 else f"{size_bytes / 1024 / 1024:.2f} MiB",
+        "size_pretty": (
+            f"{size_bytes / 1024:.1f} KiB"
+            if size_bytes and size_bytes < 1024 * 1024
+            else f"{size_bytes / 1024 / 1024:.2f} MiB" if size_bytes else "n/a"
+        ),
     }
 
 
@@ -445,8 +439,8 @@ def get_dataset_storage(dataset_id):
     return {
         "dataset_id": dataset_id,
         "filename": dataset["filename"],
-        "start_date": dataset["start_date"].isoformat(),
-        "end_date": dataset["end_date"].isoformat(),
+        "start_date": _iso(dataset["start_date"]),
+        "end_date": _iso(dataset["end_date"]),
         "row_count": int(dataset["row_count"]),
         "latest_close": float(dataset["latest_close"]),
         "created_at": created.isoformat(sep=" ")
@@ -485,8 +479,8 @@ def run_integrity_check():
             SELECT COUNT(*) AS n FROM price_data
             WHERE `open` <= 0 OR high <= 0 OR low <= 0 OR close <= 0
                OR volume < 0
-               OR high < GREATEST(`open`, close)
-               OR low > LEAST(`open`, close)
+        OR high < MAX(`open`, close)
+        OR low > MIN(`open`, close)
             """
         )
         checks["invalid_candles"] = int(cursor.fetchone()["n"])
@@ -537,22 +531,24 @@ def run_integrity_check():
 #   2. single statement only, comments stripped before validation,
 #   3. statement must start with SELECT / WITH / SHOW / DESCRIBE / EXPLAIN,
 #   4. mutating keywords denied anywhere in the text (catches `WITH..DELETE`),
-#   5. INTO OUTFILE / DUMPFILE / @var writes denied,
-#   6. the session itself is SET TRANSACTION READ ONLY, so even a filter
-#      bypass could not mutate data,
-#   7. bounded: 10k chars, 15s server-side timeout, MAX_RAW_ROWS rows.
+#   5. ATTACH / PRAGMA / session statements denied,
+#   6. the connection itself is opened READ ONLY (mode=ro locally,
+#      PRAGMA query_only on remotes), so even a filter bypass could not
+#      mutate data,
+#   7. bounded: 10k chars, MAX_RAW_ROWS rows per result.
 # ---------------------------------------------------------------------------
 
 MAX_RAW_ROWS = 500
 MAX_SQL_LENGTH = 10_000
 QUERY_TIMEOUT_MS = 15_000
 
-_ALLOWED_PREFIXES = ("select", "with", "show", "describe", "desc", "explain")
+_ALLOWED_PREFIXES = ("select", "with", "explain")
 
 _DENIED_KEYWORDS = re.compile(
     r"\b(insert|update|delete|drop|alter|create|truncate|replace|call|"
     r"set|use|grant|revoke|kill|shutdown|lock|unlock|load|handler|"
-    r"rename|optimize|analyze|cache|flush|purge|reset)\b",
+    r"rename|optimize|analyze|cache|flush|purge|reset|attach|detach|"
+    r"pragma|vacuum)\b",
     re.IGNORECASE,
 )
 _OUTFILE_PATTERN = re.compile(r"\binto\s+(outfile|dumpfile|@)", re.IGNORECASE)
@@ -565,7 +561,7 @@ class QueryRejected(ValueError):
 
 
 class QueryExecutionError(RuntimeError):
-    """MySQL rejected or failed while running a validated query."""
+    """The engine rejected or failed while running a validated query."""
 
     def __init__(self, message, errno=None):
         super().__init__(message)
@@ -619,20 +615,16 @@ def validate_raw_query(sql):
 def run_raw_query(sql):
     """Run one validated read-only statement; return Workbench-style output."""
     body = validate_raw_query(sql)
-    connection = create_connection()
+    # Read-only enforced at the connection level: mode=ro locally and
+    # PRAGMA query_only on libSQL remotes (defence in depth on top of the
+    # statement validator).
+    connection = create_connection(readonly=True)
     try:
         cursor = connection.cursor(buffered=True)
-        cursor.execute("SET SESSION TRANSACTION READ ONLY")
-        try:
-            cursor.execute(f"SET SESSION MAX_EXECUTION_TIME={QUERY_TIMEOUT_MS}")
-        except DatabaseError:
-            pass  # older MySQL without the optimizer hint — filters still apply
         started = time.perf_counter()
         try:
             cursor.execute(body)
         except Exception as exc:
-            # mysql-connector raises its own hierarchy (ProgrammingError etc.);
-            # wrap everything so the API layer can surface a clean 422.
             errno = getattr(exc, "errno", None)
             raise QueryExecutionError(str(exc), errno=errno) from exc
         elapsed_ms = round((time.perf_counter() - started) * 1000, 1)

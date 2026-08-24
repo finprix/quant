@@ -50,3 +50,8 @@ desktop.ini
 .vscode/
 *.swp
 *~
+
+# Local libSQL databases
+*.db
+*.db-*
+backend/data/

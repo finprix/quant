@@ -516,7 +516,15 @@ export default function AiPage() {
           ))}
         </div>
 
-        {queryError ? <ErrorState message={queryError} /> : null}
+        {queryError ? (
+          <>
+            <ErrorState message={queryError} />
+            <p className="fineprint">
+              AI interpretation temporarily unavailable. Quantitative results
+              remain available below and through every other page.
+            </p>
+          </>
+        ) : null}
       </TerminalPanel>
 
       {querying && !result ? (

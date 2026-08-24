@@ -21,6 +21,7 @@ from datetime import date, timedelta
 import database
 from analytics import calculate_summary
 from data_sources import get_provider, to_price_rows
+from data_sources.base import DataSourceUnavailable, InvalidRequest, InvalidSymbol
 from fingerprint import dataframe_from_price_records
 
 
@@ -528,6 +529,53 @@ def get_import_job(job_id):
         return database.get_ingestion_job(job_id)
     except Exception:
         return None
+
+
+# ---------------------------------------------------------------------------
+# Live quotes (near-real-time, cached)
+# ---------------------------------------------------------------------------
+
+_QUOTE_CACHE = {}
+_QUOTE_TTL_SECONDS = 60
+
+
+def get_live_quote(symbol):
+    """Lightweight latest quote for one symbol (no DB writes).
+
+    Cached in-process for _QUOTE_TTL_SECONDS so dashboard auto-refresh
+    never hammers the provider. Raises InvalidSymbol/DataSourceUnavailable
+    on failure — routes translate that into graceful errors.
+    """
+    import time as _time
+
+    key = str(symbol).upper().strip()
+    now = _time.time()
+    cached = _QUOTE_CACHE.get(key)
+    if cached and now - cached["ts"] < _QUOTE_TTL_SECONDS:
+        return {**cached["quote"], "cached": True}
+
+    import yfinance as yf
+
+    ticker = yf.Ticker(key)
+    info = ticker.fast_info
+    price = float(info.last_price) if info.last_price is not None else None
+    prev = float(info.previous_close) if info.previous_close is not None else None
+    if price is None:
+        raise DataSourceUnavailable(f"No live quote available for '{key}'.")
+    change = price - prev if prev is not None else None
+    quote = {
+        "symbol": key,
+        "price": round(price, 4),
+        "previous_close": round(prev, 4) if prev is not None else None,
+        "change": round(change, 4) if change is not None else None,
+        "change_percent": round(change / prev * 100, 2)
+        if change is not None and prev else None,
+        "currency": str(getattr(info, "currency", "") or ""),
+        "source": "yahoo",
+        "as_of": _time.strftime("%Y-%m-%dT%H:%M:%SZ", _time.gmtime()),
+    }
+    _QUOTE_CACHE[key] = {"ts": now, "quote": quote}
+    return {**quote, "cached": False}
 
 
 def list_market_universe():

@@ -1,4 +1,5 @@
 fastapi
+libsql-client
 httpx
 uvicorn
 python-multipart
@@ -7,6 +8,4 @@ numpy
 scipy
 statsmodels
 scikit-learn
-mysql-connector-python
-
 yfinance

@@ -34,11 +34,8 @@ def test_validator():
         "SELECT * FROM datasets LIMIT 5",
         "  /* hi */ SELECT 1;",
         "WITH t AS (SELECT 1 AS x) SELECT x FROM t",
-        "SHOW TABLES",
-        "DESCRIBE price_data",
         "EXPLAIN SELECT 1",
-        # UPDATE_TIME must not trip the keyword filter (word-boundary safe).
-        "SELECT UPDATE_TIME FROM information_schema.TABLES LIMIT 1",
+        "SELECT name FROM sqlite_master WHERE type='table' LIMIT 5",
     ]
     denied = [
         "DELETE FROM datasets",
@@ -47,11 +44,14 @@ def test_validator():
         "DROP TABLE price_data",
         "SELECT 1; DROP TABLE datasets",
         "INSERT INTO datasets VALUES (1)",
-        "SELECT * INTO OUTFILE '/tmp/x' FROM price_data",
+        "ATTACH DATABASE 'x' AS y",
+        "PRAGMA journal_mode = DELETE",
+        "SHOW TABLES",
+        "DESCRIBE datasets",
         "SET @x=1",
         "CREATE TABLE t (id INT)",
         "-- SELECT 1\nDELETE FROM datasets",
-        "/* SELECT */ DROP DATABASE market_dna",
+        "",
         "",
         "   ",
         "/* only comment */",
@@ -129,22 +129,24 @@ def test_http_surface():
                                   for row in view["rows"]],
                   f"{len(raw['rows'])} vs {len(view['rows'])}")
 
-        r = client.post("/database/query", json={"sql": "SHOW TABLES"})
-        check("SHOW TABLES works", r.status_code == 200 and any(
+        r = client.post(
+            "/database/query",
+            json={"sql": "SELECT name FROM sqlite_master WHERE type='table'"},
+        )
+        check("table listing works", r.status_code == 200 and any(
             "price_data" in str(cell)
             for row in r.json().get("rows", []) for cell in row))
-
-        r = client.post("/database/query", json={"sql": "DESCRIBE datasets"})
-        check("DESCRIBE works", r.status_code == 200
-              and r.json()["columns"][0] == "Field")
 
         rejections = [
             ("DELETE FROM datasets", "guest-style mutation"),
             ("UPDATE datasets SET filename='x' WHERE id=1", "mutation"),
             ("DROP TABLE price_data", "ddl"),
             ("SELECT 1; DROP TABLE datasets", "multi-statement"),
-            ("SELECT * INTO OUTFILE '/tmp/x' FROM price_data", "outfile"),
+            ("ATTACH DATABASE 'x' AS y", "attach"),
+            ("PRAGMA journal_mode = DELETE", "pragma"),
             ("SET @x=1", "session var"),
+            ("SHOW TABLES", "mysql-ism"),
+            ("DESCRIBE datasets", "mysql-ism"),
             ("", "empty"),
             ("   ", "whitespace only"),
             ("/* only comment */", "comment only"),
@@ -164,8 +166,10 @@ def test_http_surface():
         r = client.post(
             "/database/query", json={"sql": "SELECT nope FROM nothing"}
         )
-        check("mysql errno surfaced", "1146" in r.json().get("detail", ""),
-              r.text[:100])
+        detail = r.json().get("detail", "")
+        check("engine error surfaced with reason",
+              ("no such table" in detail.lower()) or "nothing" in detail,
+              detail[:100])
 
         after = {d["id"]: d["row_count"]
                  for d in client.get("/datasets").json()["datasets"]}
