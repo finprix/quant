@@ -22,16 +22,28 @@ export class ErrorBoundary extends Component {
       <div className="state-block" role="alert">
         <p className="state-title">VIEW CRASHED</p>
         <p className="state-hint">
-          This view failed to render{error?.message ? `: ${error.message}` : ""}.
-          The rest of FINPRIX remains available.
+          {error?.message
+            ? `This view failed to render: ${error.message}.`
+            : "This view failed to render."}{" "}
+          The rest of FINPRIX remains available. If this started after an
+          update, a full reload picks up the latest build.
         </p>
-        <button
-          type="button"
-          className="btn primary"
-          onClick={() => this.setState({ error: null })}
-        >
-          Reload View
-        </button>
+        <div style={{ display: "flex", gap: 8, justifyContent: "center" }}>
+          <button
+            type="button"
+            className="btn primary"
+            onClick={() => this.setState({ error: null })}
+          >
+            Reload View
+          </button>
+          <button
+            type="button"
+            className="btn"
+            onClick={() => window.location.reload()}
+          >
+            Reload App
+          </button>
+        </div>
       </div>
     );
   }

@@ -728,41 +728,68 @@ def get_live_quote(symbol):
     return {**quote, "cached": False}
 
 
-def get_symbol_news(symbol, limit=8):
-    """Public headlines for one symbol via the provider (pass-through)."""
-    import yfinance as yf
+def _normalize_news_entries(raw, limit):
+    """Map provider news entries (old + new yfinance shapes) to plain dicts."""
+    import time as _time
 
-    key = str(symbol).upper().strip()
-    raw = yf.Ticker(key).news or []
     items = []
-    for entry in raw[:limit]:
-        content = entry.get("content") or entry
+    for entry in (raw or [])[:limit]:
+        if not isinstance(entry, dict):
+            continue
+        content = entry.get("content") if isinstance(entry.get("content"), dict) else entry
         link = None
         if isinstance(content.get("clickThroughUrl"), dict):
             link = content["clickThroughUrl"].get("url")
         if not link and isinstance(content.get("canonicalUrl"), dict):
             link = content["canonicalUrl"].get("url")
+        if not link and isinstance(content.get("link"), str):
+            link = content["link"]
         published = None
         if content.get("pubDate"):
             published = str(content["pubDate"])
-        elif content.get("providerPublishTime"):
+        elif content.get("providerPublishTime") is not None:
             ts = content["providerPublishTime"]
             published = (
                 _time.strftime("%Y-%m-%dT%H:%M:%SZ", _time.gmtime(ts))
                 if isinstance(ts, (int, float))
                 else str(ts)
             )
-        items.append(
-            {
-                "title": content.get("title"),
-                "publisher": (content.get("provider") or {}).get("displayName")
-                if isinstance(content.get("provider"), dict)
-                else content.get("publisher"),
-                "link": link,
-                "published": published,
-            }
+        publisher = (
+            (content.get("provider") or {}).get("displayName")
+            if isinstance(content.get("provider"), dict)
+            else content.get("publisher")
         )
-    return [i for i in items if i["title"]]
+        title = content.get("title")
+        if title:
+            items.append(
+                {"title": title, "publisher": publisher, "link": link,
+                 "published": published}
+            )
+    return items
+
+
+def get_symbol_news(symbol, limit=8):
+    """Public headlines for one symbol via the provider (pass-through).
+
+    Primary source is the ticker news endpoint; when it returns nothing
+    the structured search endpoint's news feed is used as a fallback so a
+    single quiet endpoint never blanks an entire panel.
+    """
+    import yfinance as yf
+
+    key = str(symbol).upper().strip()
+    try:
+        raw = yf.Ticker(key).news or []
+    except Exception:
+        raw = []
+    items = _normalize_news_entries(raw, limit)
+    if not items:
+        try:
+            search = yf.Search(query=key, max_results=0, news_count=limit)
+            items = _normalize_news_entries(getattr(search, "news", None), limit)
+        except Exception:
+            items = []
+    return items
 
 
 def get_watchlist_quotes():

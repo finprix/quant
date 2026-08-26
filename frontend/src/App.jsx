@@ -1,10 +1,11 @@
-import { lazy, Suspense } from "react";
+import { Suspense } from "react";
 import { Routes, Route, Navigate, useLocation, useSearchParams } from "react-router-dom";
 import TopNav from "./components/layout/TopNav.jsx";
 import ContextBar from "./components/layout/ContextBar.jsx";
 import AnalysisLayout from "./components/layout/AnalysisLayout.jsx";
 import { LoadingState } from "./components/states/States.jsx";
 import ErrorBoundary from "./components/common/ErrorBoundary.jsx";
+import { lazyWithRetry } from "./lib/lazyRetry.js";
 import { useAuth } from "./context/AuthContext.jsx";
 
 // Core pages (small, needed on first paint)
@@ -15,16 +16,17 @@ import WatchlistsPage from "./pages/WatchlistsPage.jsx";
 import MarketsPage from "./pages/MarketsPage.jsx";
 import Datasets from "./pages/Datasets.jsx";
 
-// Heavier analytical pages load on demand
-const FingerprintPage = lazy(() => import("./pages/FingerprintPage.jsx"));
-const AnaloguesPage = lazy(() => import("./pages/AnaloguesPage.jsx"));
-const RegimesPage = lazy(() => import("./pages/RegimesPage.jsx"));
-const IntelligencePage = lazy(() => import("./pages/IntelligencePage.jsx"));
-const HeatmapsPage = lazy(() => import("./pages/HeatmapsPage.jsx"));
-const ComparePage = lazy(() => import("./pages/ComparePage.jsx"));
-const AiPage = lazy(() => import("./pages/AiPage.jsx"));
-const ReportPage = lazy(() => import("./pages/ReportPage.jsx"));
-const DatabasePage = lazy(() => import("./pages/DatabasePage.jsx"));
+// Heavier analytical pages load on demand — resilient to stale chunks
+// after redeploys (retry import, then one silent reload).
+const FingerprintPage = lazyWithRetry(() => import("./pages/FingerprintPage.jsx"));
+const AnaloguesPage = lazyWithRetry(() => import("./pages/AnaloguesPage.jsx"));
+const RegimesPage = lazyWithRetry(() => import("./pages/RegimesPage.jsx"));
+const IntelligencePage = lazyWithRetry(() => import("./pages/IntelligencePage.jsx"));
+const HeatmapsPage = lazyWithRetry(() => import("./pages/HeatmapsPage.jsx"));
+const ComparePage = lazyWithRetry(() => import("./pages/ComparePage.jsx"));
+const AiPage = lazyWithRetry(() => import("./pages/AiPage.jsx"));
+const ReportPage = lazyWithRetry(() => import("./pages/ReportPage.jsx"));
+const DatabasePage = lazyWithRetry(() => import("./pages/DatabasePage.jsx"));
 
 /**
  * FINPRIX route ownership (v0.20.0) — web-first, symbol-first:
