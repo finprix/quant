@@ -1,5 +1,5 @@
 /**
- * Heatmap computation over genuine Quant Vector price data.
+ * Heatmap computation over genuine FINPRIX price data.
  * All values derive from GET /datasets/{id}/prices (client-side transforms)
  * or from backend regime/analogue payloads — nothing is invented.
  */

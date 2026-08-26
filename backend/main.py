@@ -1,8 +1,9 @@
-"""QUANT VECTOR backend entry point.
+"""FINPRIX backend entry point.
 
-FastAPI application that accepts historical OHLCV CSV uploads, validates
-them, persists everything to MySQL and runs the quantitative analytics
-engine defined in analytics.py.
+FastAPI application powering the FINPRIX market intelligence terminal:
+public symbol-first market data, quantitative analytics engines
+(fingerprint / analogues / regimes / intelligence), cached dataset
+persistence and optional AI reasoning.
 """
 
 import io
@@ -34,6 +35,7 @@ import db_inspector
 import fingerprint
 import intelligence
 import market_ingest
+import market_web
 import regimes
 
 # Local development configuration (.env next to this file). Real environment
@@ -68,7 +70,7 @@ async def lifespan(_):
     yield
 
 
-app = FastAPI(title="QUANT VECTOR API", version="0.19.0", lifespan=lifespan)
+app = FastAPI(title="FINPRIX API", version="0.20.0", lifespan=lifespan)
 
 _ALLOWED_ORIGINS = [
     origin.strip()
@@ -1060,6 +1062,98 @@ def market_news(symbol: str):
             status_code=502,
             detail="Headlines temporarily unavailable.",
         )
+
+
+@app.get("/market/news")
+def market_news_feed(
+    category: str = Query("latest", max_length=24),
+    symbols: str = Query(None, max_length=400),
+):
+    """Aggregated public headline feed (FINPRIX news terminal, v0.20.0).
+
+    Real provider headlines only, grouped by category; `symbols` adds
+    extra comma-separated feeds (used for the watchlist tab).
+    """
+    extra = [s for s in (symbols or "").split(",") if s.strip()][:12]
+    try:
+        return market_web.get_news_feed(category=category, extra_symbols=extra)
+    except Exception:
+        raise HTTPException(status_code=502, detail="Headlines temporarily unavailable.")
+
+
+@app.get("/market/global")
+def market_global():
+    """Global market board: indices, commodities, FX and crypto quotes.
+
+    One batched provider call cached briefly in-process. Every row is a
+    clickable instrument; unavailable rows carry an error field instead
+    of fabricated zeros.
+    """
+    try:
+        return market_web.get_board()
+    except RuntimeError as exc:
+        raise HTTPException(status_code=502, detail=str(exc))
+
+
+@app.get("/market/movers")
+def market_movers():
+    """Top gainers / losers / most active across curated liquid instruments."""
+    try:
+        return market_web.get_movers()
+    except RuntimeError as exc:
+        raise HTTPException(status_code=502, detail=str(exc))
+
+
+@app.get("/sectors")
+def sector_performance():
+    """US sector ETF performance over 1D / 5D / 1M."""
+    try:
+        return market_web.get_sector_performance()
+    except RuntimeError as exc:
+        raise HTTPException(status_code=502, detail=str(exc))
+
+
+@app.get("/asset/{symbol}")
+def asset_overview(symbol: str):
+    """Symbol-first bootstrap: resolve -> quote -> ensure cached history.
+
+    Public web-first entry point: creates or refreshes the analysis-ready
+    dataset behind the scenes so users never manage datasets manually.
+    Non-destructive (cache warm-up only). Quote failure degrades the
+    response gracefully — cached coverage is still returned when known.
+    """
+    key = str(symbol or "").strip()
+    if not key or len(key) > 24:
+        raise HTTPException(status_code=422, detail="Invalid symbol.")
+    try:
+        data = market_web.ensure_symbol_dataset(key)
+    except InvalidSymbol as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
+    except DataSourceUnavailable as exc:
+        raise HTTPException(
+            status_code=502,
+            detail=f"Historical data could not be retrieved right now: {exc}",
+        )
+    except database.DatabaseError as exc:
+        raise HTTPException(status_code=503, detail=str(exc))
+    except RuntimeError as exc:
+        raise HTTPException(status_code=502, detail=str(exc))
+
+    try:
+        quote = market_ingest.get_live_quote(key)
+    except Exception:
+        quote = None
+
+    return {
+        **data,
+        "quote": quote,
+        "engines": {
+            "fingerprint": "READY" if (data["coverage"]["row_count"] or 0) >= 60 else "INSUFFICIENT DATA",
+            "analogues": "READY" if (data["coverage"]["row_count"] or 0) >= 65 else "INSUFFICIENT DATA",
+            "regimes": "READY" if (data["coverage"]["row_count"] or 0) >= 120 else "INSUFFICIENT DATA",
+            "intelligence": "READY",
+        },
+    }
 
 
 @app.get("/watchlist")

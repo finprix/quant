@@ -62,8 +62,8 @@ export default function ReportPage() {
     const previous = document.title;
     const datasetName = datasetQuery.data?.filename;
     document.title = datasetName
-      ? `Quant Vector — Research Report — ${datasetName}`
-      : "Quant Vector — Research Report";
+      ? `FINPRIX — Research Report — ${datasetName}`
+      : "FINPRIX — Research Report";
     return () => {
       document.title = previous;
     };
@@ -147,7 +147,10 @@ export default function ReportPage() {
       {/* Masthead */}
       <header className="report-masthead">
         <div>
-          <span className="report-brand">QUANT VECTOR</span>
+          <span className="report-brand finprix-logo finprix-logo--report">
+            <span className="finprix-fin">fin</span>
+            <span className="finprix-prix">Prix</span>
+          </span>
           <h1>RESEARCH REPORT</h1>
           <p className="report-meta mono">
             DATASET #{dataset?.id} · {dataset?.filename} ·{" "}

@@ -6,29 +6,20 @@ import {
   useMemo,
   useState,
 } from "react";
-import { getAuthSession, loginDeveloper, logoutDeveloper } from "../api/client.js";
+import { getAuthSession } from "../api/client.js";
 
 /**
- * Access roles:
- *   null        — entry gate (no session chosen yet)
- *   "guest"     — read-only research mode (backend enforces all limits)
- *   "developer" — dataset administration + research (PIN-verified)
- *
- * Guest choice persists locally for convenience only; every privileged
- * operation is enforced server-side by require_developer().
+ * FINPRIX is public (v0.20.0): everyone browses immediately — there is no
+ * access gate. The historical developer/PIN infrastructure survives
+ * server-side for administrative endpoints only; if a valid developer
+ * cookie happens to exist it is restored silently. No login UI exists.
  */
-const GUEST_KEY = "market-dna.guest";
-
 const AuthContext = createContext(null);
 
 export function AuthProvider({ children }) {
   const [ready, setReady] = useState(false);
-  const [role, setRole] = useState(null);
-  const [loginError, setLoginError] = useState(null);
-  const [authenticating, setAuthenticating] = useState(false);
+  const [role, setRole] = useState("guest");
 
-  // Restore session state on boot: a valid developer cookie survives
-  // refreshes; guests are remembered for convenience.
   useEffect(() => {
     let cancelled = false;
     getAuthSession()
@@ -36,9 +27,6 @@ export function AuthProvider({ children }) {
         if (cancelled) return;
         if (session?.authenticated && session.role === "developer") {
           setRole("developer");
-          window.localStorage.removeItem(GUEST_KEY);
-        } else if (window.localStorage.getItem(GUEST_KEY) === "1") {
-          setRole("guest");
         }
       })
       .catch(() => {})
@@ -48,52 +36,16 @@ export function AuthProvider({ children }) {
     };
   }, []);
 
-  const enterAsGuest = useCallback(() => {
-    window.localStorage.setItem(GUEST_KEY, "1");
-    setRole("guest");
-    setLoginError(null);
-  }, []);
-
-  const login = useCallback(async (pin) => {
-    setAuthenticating(true);
-    setLoginError(null);
-    try {
-      const result = await loginDeveloper(pin);
-      window.localStorage.removeItem(GUEST_KEY);
-      setRole(result.role === "developer" ? "developer" : "guest");
-      return true;
-    } catch (error) {
-      setLoginError(error?.message || "Login failed.");
-      return false;
-    } finally {
-      setAuthenticating(false);
-    }
-  }, []);
-
-  const logout = useCallback(async () => {
-    try {
-      await logoutDeveloper();
-    } catch {
-      /* clearing local state regardless */
-    }
-    window.localStorage.removeItem(GUEST_KEY);
-    setRole(null);
-    setLoginError(null);
-  }, []);
-
   const value = useMemo(
     () => ({
       ready,
       role,
       isDeveloper: role === "developer",
       isGuest: role === "guest",
-      loginError,
-      authenticating,
-      login,
-      enterAsGuest,
-      logout,
+      loginError: null,
+      authenticating: false,
     }),
-    [ready, role, loginError, authenticating, login, enterAsGuest, logout],
+    [ready, role],
   );
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;

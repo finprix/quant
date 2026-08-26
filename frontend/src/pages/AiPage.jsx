@@ -309,7 +309,7 @@ function GroundingPanel({ context }) {
   const consensus = intelligence?.analogue_consensus;
 
   return (
-    <TerminalPanel title="GROUNDING CONTEXT — QUANT VECTOR ENGINES">
+    <TerminalPanel title="GROUNDING CONTEXT — FINPRIX ENGINES">
       <MetricStrip items={metrics} />
       <div className="ai-grounding-row">
         <div className="ai-grounding-cell">
@@ -341,7 +341,7 @@ function GroundingPanel({ context }) {
       </div>
       <p className="fineprint">
         Every number quoted by the assistant is drawn from these engine outputs.
-        Quant Vector never lets the model invent values.
+        Finprix never lets the model invent values.
       </p>
     </TerminalPanel>
   );
@@ -432,7 +432,7 @@ export default function AiPage() {
       <div className="page">
         <SectionHeader
           title="AI Analysis"
-          desc="Natural-language reasoning over Quant Vector's quantitative evidence."
+          desc="Natural-language reasoning over Finprix's quantitative evidence."
         />
         <NoDatasetState />
       </div>
@@ -445,7 +445,7 @@ export default function AiPage() {
     <div className="page">
       <SectionHeader
         title="AI Analysis"
-        desc="Natural-language reasoning over Quant Vector's quantitative evidence."
+        desc="Natural-language reasoning over Finprix's quantitative evidence."
       />
 
       <TerminalPanel title={`QUERY — DATASET #${activeId}`}>
@@ -528,7 +528,7 @@ export default function AiPage() {
       </TerminalPanel>
 
       {querying && !result ? (
-        <LoadingState label="RUNNING QUANT VECTOR TOOLS" />
+        <LoadingState label="RUNNING FINPRIX TOOLS" />
       ) : null}
 
       {result ? (
@@ -570,7 +570,7 @@ function GroundingNote({ datasetId }) {
   return (
     <p className="fineprint center">
       Grounding context for dataset #{datasetId} will appear here once a query
-      runs against the Quant Vector engines.
+      runs against the Finprix engines.
     </p>
   );
 }

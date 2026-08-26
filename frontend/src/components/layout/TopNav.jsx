@@ -1,37 +1,35 @@
 import { useEffect, useRef, useState } from "react";
 import { NavLink, useLocation } from "react-router-dom";
 import { APP_VERSION } from "../../lib/version.js";
-import { useAuth } from "../../context/AuthContext.jsx";
-import { getWatchlist } from "../../api/watchlist.js";
+import FinprixLogo from "../brand/FinprixLogo.jsx";
+import CommandBar from "./CommandBar.jsx";
+import useGlobalBoard from "../../hooks/useGlobalBoard.js";
+import { marketPath, formatPrice } from "../market/MarketCard.jsx";
 import { ANALYSIS_VIEWS } from "../../lib/navigation.js";
-import GlobalSearch from "./GlobalSearch.jsx";
 
-// Product hierarchy (v0.19.0): DISCOVER / ANALYZE / RESEARCH / DATA.
+// Product hierarchy (v0.20.0): DISCOVER / ANALYZE / RESEARCH / NEWS / DATA.
+// Every entry is always interactive — no disabled-looking navigation.
 const NAV_GROUPS = [
   {
     label: "DISCOVER",
     children: [
-      { to: "/", label: "Overview" },
+      { to: "/", label: "Overview", match: (p) => p === "/" },
       { to: "/markets", label: "Markets" },
     ],
   },
   {
     label: "ANALYZE",
-    children: ANALYSIS_VIEWS.map((v) => ({ to: `/analysis/${v.key}`, label: v.label })),
+    children: ANALYSIS_VIEWS.map((v) => ({
+      to: `/analysis/${v.key}`,
+      label: v.label,
+    })),
   },
   {
     label: "RESEARCH",
     children: [
       { to: "/compare", label: "Compare" },
       { to: "/ai", label: "AI Assistant" },
-      { to: "/report", label: "Report" },
-    ],
-  },
-  {
-    label: "DATA",
-    children: [
-      { to: "/datasets", label: "Datasets" },
-      { to: "/database", label: "Database" },
+      { to: "/report", label: "Reports" },
     ],
   },
 ];
@@ -50,7 +48,9 @@ function NavGroup({ group }) {
     return () => document.removeEventListener("mousedown", onDoc);
   }, []);
 
-  const anyActive = group.children.some((c) => location.pathname === c.to);
+  const anyActive = group.children.some((c) =>
+    c.match ? c.match(location.pathname) : location.pathname.startsWith(c.to),
+  );
 
   return (
     <div className={`nav-group${anyActive ? " has-active" : ""}`} ref={ref}>
@@ -68,6 +68,7 @@ function NavGroup({ group }) {
             <NavLink
               key={child.to}
               to={child.to}
+              end={child.to === "/"}
               className={({ isActive }) =>
                 `nav-menu-item${isActive ? " active" : ""}`
               }
@@ -81,86 +82,62 @@ function NavGroup({ group }) {
   );
 }
 
+/** Live global indices ticker across the top of every page. */
 function TickerStrip() {
-  const [ticks, setTicks] = useState(null);
-  useEffect(() => {
-    let alive = true;
-    const load = () =>
-      getWatchlist()
-        .then((payload) => {
-          if (!alive) return;
-          setTicks(
-            (payload.symbols || [])
-              .filter((r) => r.quote)
-              .map((r) => ({
-                symbol: r.symbol,
-                price: r.quote.price,
-                pct: r.quote.change_percent,
-              })),
-          );
-        })
-        .catch(() => {});
-    load();
-    const timer = setInterval(load, 60_000);
-    return () => {
-      alive = false;
-      clearInterval(timer);
-    };
-  }, []);
-  if (!ticks || ticks.length === 0) return null;
+  const { data } = useGlobalBoard(60_000);
+  const ticks = (data?.quotes || []).filter(
+    (q) => q.group === "index" && q.quote && q.quote.change_percent != null,
+  );
+  if (!ticks.length) return null;
   return (
-    <div className="ticker-strip mono" aria-label="Watchlist quotes">
+    <div className="ticker-strip mono" aria-label="Global index quotes">
       {ticks.map((t) => (
-        <span key={t.symbol} className="tick">
-          <span className="tick-symbol">{t.symbol}</span>{" "}
-          <span className="tick-price">{t.price}</span>{" "}
-          <span className={`tick-pct ${t.pct >= 0 ? "pos" : "neg"}`}>
-            {t.pct >= 0 ? "+" : ""}
-            {t.pct}%
+        <NavLink key={t.symbol} to={marketPath(t.symbol)} className="tick">
+          <span className="tick-symbol">{t.label ?? t.symbol}</span>{" "}
+          <span className="tick-price">{formatPrice(t.quote.price)}</span>{" "}
+          <span
+            className={`tick-pct ${t.quote.change_percent >= 0 ? "pos" : "neg"}`}
+          >
+            {t.quote.change_percent > 0 ? "+" : ""}
+            {t.quote.change_percent}%
           </span>
-        </span>
+        </NavLink>
       ))}
     </div>
   );
 }
 
 export default function TopNav() {
-  const { isDeveloper, logout } = useAuth();
   return (
     <header className="topnav">
       <div className="brand">
-        <span className="brand-mark" aria-hidden="true" />
-        <span className="brand-name">QUANT VECTOR</span>
+        <NavLink to="/" aria-label="FINPRIX home">
+          <FinprixLogo size="navbar" />
+        </NavLink>
         <span className="brand-version">v{APP_VERSION}</span>
-        <span className={`role-chip mono${isDeveloper ? " dev" : ""}`}>
-          {isDeveloper ? "DEVELOPER" : "GUEST ACCESS"}
-        </span>
       </div>
-      <GlobalSearch />
       <nav className="topnav-links" aria-label="Primary">
-        {NAV_GROUPS.map((group) =>
-          group.children ? (
-            <NavGroup key={group.label} group={group} />
-          ) : (
-            <NavLink
-              key={group.to}
-              to={group.to}
-              end={group.end}
-              className={({ isActive }) => `nav-pill${isActive ? " active" : ""}`}
-            >
-              {group.label}
-            </NavLink>
-          ),
-        )}
+        {NAV_GROUPS.map((group) => (
+          <NavGroup key={group.label} group={group} />
+        ))}
+        <NavLink
+          to="/news"
+          className={({ isActive }) => `nav-pill${isActive ? " active" : ""}`}
+        >
+          NEWS
+        </NavLink>
+        <NavGroup
+          group={{
+            label: "DATA",
+            children: [
+              { to: "/watchlists", label: "Watchlists" },
+              { to: "/datasets", label: "Datasets" },
+              { to: "/database", label: "Database" },
+            ],
+          }}
+        />
       </nav>
-      <button
-        type="button"
-        className="btn small role-exit"
-        onClick={logout}
-        title={isDeveloper ? "Log out of the developer session" : "Exit guest session"}
-      >
-        {isDeveloper ? "LOG OUT" : "EXIT SESSION"}
-      </button>
+      <CommandBar />
       <TickerStrip />
     </header>
   );

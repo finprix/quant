@@ -66,6 +66,18 @@ function route(url) {
     });
   if (p.startsWith("/market/news"))
     return jsonResponse({ items: [] });
+  if (p === "/market/global")
+    return jsonResponse({
+      quotes: [
+        { symbol: "^GSPC", label: "S&P 500", group: "index", region: "US",
+          quote: { price: 5000, change_percent: 0.5, volume: 1 }, error: null },
+      ],
+      as_of: "now",
+    });
+  if (p === "/market/movers")
+    return jsonResponse({ gainers: [], losers: [], active: [], as_of: "now" });
+  if (p === "/sectors")
+    return jsonResponse({ sectors: [] });
   return jsonResponse({ detail: "not found: " + p }, 404);
 }
 
@@ -110,14 +122,14 @@ describe("Analysis workspace shell", () => {
   });
 
   it("asset context bar is exclusive to analysis routes", async () => {
-    const { container } = mountApp("/markets");
-    await screen.findByText(/^SYMBOL$/i);
+    const { container } = mountApp("/news");
+    await screen.findByText(/Market News/i);
     expect(container.querySelector(".asset-bar")).toBeNull();
   });
 
   it("unknown analysis views fall back home instead of crashing", async () => {
     mountApp("/analysis/nonsense?dataset=166");
-    // catch-all redirects to Overview (command center)
-    expect(await screen.findByText(/COMMAND CENTER/i)).toBeTruthy();
+    // catch-all redirects to the global command center
+    expect(await screen.findByText(/GLOBAL MARKET COMMAND CENTER/i)).toBeTruthy();
   });
 });

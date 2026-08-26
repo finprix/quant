@@ -1,0 +1,47 @@
+/* FINPRIX wordmark — typographic brand mark.
+ * fin  : italic high-contrast serif, deep burgundy (editorial / financial)
+ * Prix : bold upright serif, warm near-white (institutional weight)
+ */
+
+.finprix-logo {
+  align-items: baseline;
+  display: inline-flex;
+  letter-spacing: normal;
+  line-height: 1;
+  text-decoration: none;
+  white-space: nowrap;
+}
+
+.finprix-fin {
+  color: var(--finprix-red, #9e2233);
+  font-family: "Playfair Display", "Didot", "Bodoni MT", Georgia, serif;
+  font-style: italic;
+  font-weight: 600;
+  margin-right: 0.02em;
+}
+
+.finprix-prix {
+  color: var(--text-strong, #f2ece6);
+  font-family: "Playfair Display", "Didot", "Bodoni MT", Georgia, serif;
+  font-style: normal;
+  font-weight: 800;
+}
+
+/* ---- size variants ---------------------------------------------------- */
+
+.finprix-logo--small .finprix-fin,
+.finprix-logo--small .finprix-prix { font-size: 15px; }
+
+.finprix-logo--navbar .finprix-fin,
+.finprix-logo--navbar .finprix-prix { font-size: 21px; }
+
+.finprix-logo--medium .finprix-fin,
+.finprix-logo--medium .finprix-prix { font-size: 30px; }
+
+.finprix-logo--hero .finprix-fin { font-size: 58px; }
+.finprix-logo--hero .finprix-prix { font-size: 58px; }
+.finprix-logo--hero { filter: drop-shadow(0 2px 18px rgba(158, 34, 51, 0.25)); }
+
+/* print-safe monochrome variant */
+.finprix-logo--report .finprix-fin { color: #1a1a1a; }
+.finprix-logo--report .finprix-prix { color: #000; }

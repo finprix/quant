@@ -896,7 +896,7 @@ export default function DatabasePage() {
               {status.reason ?? "Unable to establish database connection."}
             </p>
             <p className="fineprint">
-              The rest of Quant Vector keeps working with cached analyses;
+              The rest of Finprix keeps working with cached analyses;
               database-backed views will resume automatically once MySQL is
               reachable again.
             </p>

@@ -119,7 +119,7 @@ export function useApiData(path, { enabled = true } = {}) {
         const apiError =
           error instanceof ApiError
             ? error
-            : new ApiError("Backend unreachable. Verify the QUANT VECTOR API is running.", 0, null);
+            : new ApiError("Backend unreachable. Verify the FINPRIX API is running.", 0, null);
         if (mountedRef.current && run === runRef.current) {
           setState((prev) => ({
             data: prev.data,
@@ -220,7 +220,7 @@ export function useParallelApiData(paths) {
             const apiError =
               error instanceof ApiError
                 ? error
-                : new ApiError("Backend unreachable. Verify the QUANT VECTOR API is running.", 0, null);
+                : new ApiError("Backend unreachable. Verify the FINPRIX API is running.", 0, null);
             return { path, data: null, error: apiError };
           }
         }),

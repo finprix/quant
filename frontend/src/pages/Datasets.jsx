@@ -127,7 +127,7 @@ function ImportPipeline({ providerLabel, job, selected }) {
       reached: stageIndex >= 3 || done,
     },
     {
-      label: "QUANT VECTOR",
+      label: "FINPRIX ENGINES",
       body: receipt?.analysis
         ? Object.entries(receipt.analysis)
             .map(([engine, state]) => `${engine}: ${state}`)
@@ -463,7 +463,7 @@ export default function Datasets() {
     <div className="page">
       <SectionHeader
         title="Market Library"
-        desc="Upload CSVs or fetch real market data into MySQL. Both paths feed the same Quant Vector engine."
+        desc="Upload CSVs or fetch real market data into MySQL. Both paths feed the same Finprix engine."
         right={
           <>
             <input
@@ -656,7 +656,7 @@ export default function Datasets() {
                   disabled={Boolean(job && !job.terminal)}
                   onClick={startImport}
                 >
-                  IMPORT INTO QUANT VECTOR
+                  IMPORT INTO FINPRIX
                 </button>
               </div>
             </div>

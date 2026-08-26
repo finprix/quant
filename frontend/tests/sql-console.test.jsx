@@ -163,7 +163,7 @@ describe("SQL console on the database tab", () => {
       await waitFor(() =>
         expect(screen.getAllByText(/sql console/i).length).toBeGreaterThan(0),
       );
-      expect(screen.getByText(/DEVELOPER ACCESS REQUIRED/i)).toBeTruthy();
+      expect(screen.getAllByText(/DEVELOPER ACCESS REQUIRED/i).length).toBeGreaterThan(0);
       expect(screen.queryByRole("textbox")).toBeNull();
       expect(
         screen.queryByRole("button", { name: /run query/i }),

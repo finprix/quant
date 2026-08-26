@@ -1,79 +1,105 @@
-import { describe, expect, it, beforeEach, vi } from "vitest";
-import { render, screen, waitFor } from "@testing-library/react";
+import { describe, it, expect, vi, beforeEach } from "vitest";
+import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter } from "react-router-dom";
-import { DatasetProvider } from "../src/context/DatasetContext.jsx";
-import { AuthProvider } from "../src/context/AuthContext.jsx";
 import MarketsPage from "../src/pages/MarketsPage.jsx";
+import { AuthProvider } from "../src/context/AuthContext.jsx";
+import { DatasetProvider } from "../src/context/DatasetContext.jsx";
 
-const watchlistPayload = {
-  symbols: [
-    {
-      id: 1,
-      symbol: "AAPL",
-      note: null,
-      added_at: "2026-08-25T10:00:00Z",
-      quote: {
-        symbol: "AAPL", price: 311.2, previous_close: 309.6, change: 1.6,
-        change_percent: 0.52, currency: "USD", source: "yahoo",
-        as_of: "2026-08-25T12:00:00Z", dataset_id: 166,
-      },
-    },
-    {
-      id: 2,
-      symbol: "TSLA",
-      note: null,
-      added_at: "2026-08-25T10:05:00Z",
-      quote: {
-        symbol: "TSLA", price: 240.1, previous_close: 244.0, change: -3.9,
-        change_percent: -1.6, currency: "USD", source: "yahoo",
-        as_of: "2026-08-25T12:00:00Z",
-      },
-    },
-  ],
-};
-watchlistPayload.gainers = [watchlistRow("AAPL")];
-watchlistPayload.losers = [watchlistRow("TSLA")];
-
-function watchlistRow(symbol) {
-  return watchlistPayload.symbols.find((s) => s.symbol === symbol);
-}
-
-let sessionDeveloper = true;
+/* v0.20.0: Markets is the discovery hub — global boards + movers, no auth. */
 
 function jsonResponse(payload, status = 200) {
-  return new Response(JSON.stringify(payload), {
+  return {
+    ok: status < 400,
     status,
-    headers: { "content-type": "application/json" },
-  });
+    headers: { get: () => "application/json" },
+    json: async () => payload,
+  };
 }
 
-const route = (path, init = {}) => {
-  if (path === "/auth/session") {
-    return sessionDeveloper
-      ? jsonResponse({ authenticated: true, role: "developer" })
-      : jsonResponse({ authenticated: false, role: null });
-  }
-  if (path === "/health") return jsonResponse({ status: "ok" });
-  if (path === "/datasets") {
-    return jsonResponse({
-      datasets: [{ id: 166, filename: "AAPL_1d.csv" }],
-    });
-  }
-  if (path === "/watchlist") {
-    if ((init.method || "GET") === "GET") return jsonResponse(watchlistPayload);
-    return jsonResponse({ added: true, entry: { symbol: "NVDA" } });
-  }
-  if (path.startsWith("/watchlist/")) {
-    return jsonResponse({ removed: true });
-  }
-  return jsonResponse({ detail: "not found" }, 404);
+function idx(symbol, label, price, pct) {
+  return {
+    symbol,
+    label,
+    group: "index",
+    region: "US",
+    quote: {
+      price,
+      previous_close: price - 1,
+      change: 1,
+      change_percent: pct,
+      volume: 1000,
+      as_of: "2026-08-26",
+    },
+    error: null,
+  };
+}
+
+const boardPayload = {
+  quotes: [
+    idx("^GSPC", "S&P 500", 5000.5, 0.7),
+    idx("^IXIC", "NASDAQ", 16000, -0.4),
+  ],
+  as_of: "2026-08-26T12:00:00Z",
 };
 
-const mountPage = () =>
+function route(url) {
+  const u = new URL(url, "http://x");
+  const path = u.pathname.replace(/^\/api/, "");
+  if (path === "/market/global") return jsonResponse(boardPayload);
+  if (path === "/market/movers")
+    return jsonResponse({
+      gainers: [
+        {
+          symbol: "NVDA", label: "NVDA", group: "us", region: "US",
+          quote: { price: 311.2, change_percent: 0.52, volume: 42_000_000 },
+          error: null,
+        },
+      ],
+      losers: [
+        {
+          symbol: "TSLA", label: "TSLA", group: "us", region: "US",
+          quote: { price: 210.1, change_percent: -1.3, volume: 30_000_000 },
+          error: null,
+        },
+      ],
+      active: [],
+      as_of: "2026-08-26T12:00:00Z",
+    });
+  if (path === "/sectors")
+    return jsonResponse({
+      sectors: [
+        { symbol: "XLK", label: "TECHNOLOGY", ret_1d: 1.84, ret_5d: 4.21, ret_1m: null },
+      ],
+    });
+  if (path === "/datasets") return jsonResponse({ datasets: [] });
+  if (path.startsWith("/market/news"))
+    return jsonResponse({
+      category: "latest",
+      items: [
+        {
+          title: "Markets rally on strong earnings",
+          link: "https://example.com/a",
+          publisher: "Example Wire",
+          published: "2026-08-26T10:00:00Z",
+          related_symbol: "^GSPC",
+        },
+      ],
+      trending: [{ symbol: "^GSPC", stories: 1 }],
+      as_of: "now",
+    });
+  return jsonResponse({ detail: "not found: " + path }, 404);
+}
+
+beforeEach(() => {
+  window.localStorage.clear();
+  global.fetch = vi.fn(async (url, options = {}) => route(url));
+});
+
+const mount = () =>
   render(
     <AuthProvider>
-      <MemoryRouter initialEntries={["/markets"]}>
+      <MemoryRouter>
         <DatasetProvider>
           <MarketsPage />
         </DatasetProvider>
@@ -81,78 +107,41 @@ const mountPage = () =>
     </AuthProvider>,
   );
 
-beforeEach(() => {
-  window.localStorage.setItem("market-dna.active-dataset-id", "166");
-  sessionDeveloper = true;
-  vi.stubGlobal(
-    "fetch",
-    vi.fn((input, init) => {
-      const url = typeof input === "string" ? input : input.url;
-      const path = url.replace(/^https?:\/\/[^/]+/, "").split("?")[0];
-      return Promise.resolve(route(path.replace(/^\/api/, ""), init ?? {}));
-    }),
-  );
-});
-
-describe("Markets page (Finprix-inspired)", () => {
-  it("renders gainers/losers cards and the live watch table", async () => {
-    mountPage();
-    expect(await screen.findByText("TOP GAINERS")).toBeTruthy();
-    expect(screen.getByText("TOP LOSERS")).toBeTruthy();
-    expect(await screen.findByText(/updated/i)).toBeTruthy();
-
-    await waitFor(() => {
-      const cells = screen.getAllByText("AAPL");
-      expect(cells.length).toBeGreaterThan(0);
-      const tableCell = cells.map((el) => el.closest("tr")).find(Boolean);
-      expect(tableCell).toBeTruthy();
-    });
-    const row = screen
-      .getAllByText("AAPL")
-      .map((el) => el.closest("tr"))
-      .find(Boolean);
-    expect(row.textContent).toContain("311.2");
-    expect(row.textContent).toContain("+0.52%");
-    expect(row.textContent).toContain("ANALYZE");
+describe("Markets discovery hub (v0.20.0)", () => {
+  it("renders global index cards with real quotes", async () => {
+    mount();
+    expect(await screen.findByText("5,000.5")).toBeTruthy();
+    expect(screen.getAllByText("S&P 500").length).toBeGreaterThan(0);
   });
 
-  it("hides mutations from guests but keeps the table readable", async () => {
-    sessionDeveloper = false;
-    mountPage();
-    await waitFor(() => expect(screen.getByText("WATCHLIST")).toBeTruthy());
-    const trackButton = screen.queryByRole("button", { name: /track/i });
-    expect(trackButton === null || trackButton.disabled).toBe(true);
-    expect(screen.queryByRole("button", { name: /remove/i })).toBeNull();
-    expect(await screen.findAllByText("AAPL").then((els) => els.length > 0)).toBe(true);
-  });
-
-  it("adds a tracked symbol as developer and refreshes", async () => {
+  it("renders movers with clickable symbols and tabs", async () => {
     const user = userEvent.setup();
-    let addedSymbol = null;
-    vi.stubGlobal(
-      "fetch",
-      vi.fn((input, init) => {
-        const url = typeof input === "string" ? input : input.url;
-        const path = url.replace(/^https?:\/\/[^/]+/, "").split("?")[0]
-          .replace(/^\/api/, "");
-        if (path === "/watchlist" && init?.method === "POST") {
-          addedSymbol = JSON.parse(init.body).symbol;
-          watchlistPayload.symbols.push({
-            ...watchlistRow("AAPL"),
-            id: 3,
-            symbol: addedSymbol,
-          });
-          return Promise.resolve(
-            jsonResponse({ added: true, entry: { symbol: addedSymbol } }),
-          );
-        }
-        return Promise.resolve(route(path, init ?? {}));
-      }),
+    mount();
+    await screen.findByText("311.20");
+    const nvdaLink = screen.getByRole("link", { name: /^NVDA$/ });
+    expect(nvdaLink.getAttribute("href")).toBe("/market/NVDA");
+    // region tabs stay interactive
+    await user.click(screen.getByRole("button", { name: /^INDIA$/ }));
+    expect(screen.getByText(/No mover data/i)).toBeTruthy();
+  });
+
+  it("renders aggregated news with trending symbols", async () => {
+    mount();
+    expect(
+      await screen.findByText(/Markets rally on strong earnings/i),
+    ).toBeTruthy();
+    const gspcLinks = screen.getAllByRole("link", { name: /GSPC/i });
+    const routed = gspcLinks.some(
+      (l) => l.getAttribute("href") === `/market/${encodeURIComponent("^GSPC")}`,
     );
-    mountPage();
-    const input = await screen.findByPlaceholderText(/AAPL/i);
-    await user.type(input, "NVDA");
-    await user.click(screen.getByRole("button", { name: /track/i }));
-    await waitFor(() => expect(addedSymbol).toBe("NVDA"));
+    expect(routed).toBe(true);
+  });
+
+  it("degrades gracefully when the provider fails", async () => {
+    global.fetch = vi.fn(async () =>
+      jsonResponse({ detail: "provider down" }, 502),
+    );
+    mount();
+    expect(await screen.findByText(/provider down|unavailable/i)).toBeTruthy();
   });
 });

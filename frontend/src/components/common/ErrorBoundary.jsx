@@ -23,7 +23,7 @@ export class ErrorBoundary extends Component {
         <p className="state-title">VIEW CRASHED</p>
         <p className="state-hint">
           This view failed to render{error?.message ? `: ${error.message}` : ""}.
-          The rest of QUANT VECTOR remains available.
+          The rest of FINPRIX remains available.
         </p>
         <button
           type="button"

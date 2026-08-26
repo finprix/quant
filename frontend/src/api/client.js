@@ -38,7 +38,7 @@ export async function request(path, { method = "GET", params, body, formData } =
     response = await fetch(url, options);
   } catch (networkError) {
     throw new ApiError(
-      "Backend unreachable. Verify the QUANT VECTOR API is running.",
+      "Backend unreachable. Verify the FINPRIX API is running.",
       0,
       null,
     );

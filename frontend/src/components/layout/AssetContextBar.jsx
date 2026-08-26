@@ -11,12 +11,13 @@ import useLiveQuote from "../../hooks/useLiveQuote.js";
  * Rendered once by AnalysisLayout — individual analysis views must not
  * duplicate this information.
  */
-export default function AssetContextBar() {
+export default function AssetContextBar({ bootstrapMeta } = {}) {
   const { activeId, activeDataset, datasets, datasetsLoading, selectDataset } =
     useDatasets();
 
   const symbol = symbolFromFilename(activeDataset?.filename);
   const quote = useLiveQuote(symbol);
+  const instrumentName = bootstrapMeta?.instrument?.name;
 
   if (!activeDataset) {
     return (
@@ -37,13 +38,12 @@ export default function AssetContextBar() {
         <span className="asset-symbol mono">{symbol ?? "?"}</span>
         <div className="asset-meta">
           <span className="asset-dataset">
-            {activeDataset.filename}
-            <span className="fineprint"> #{activeId}</span>
+            {instrumentName ?? activeDataset.filename}
           </span>
           <span className="asset-sub fineprint">
-            Rows {activeDataset.row_count?.toLocaleString() ?? "—"} · Updated{" "}
-            {formatRelativeTime(activeDataset.end_date)} ·{" "}
-            {activeDataset.start_date} → {activeDataset.end_date}
+            {activeDataset.filename} · Rows{" "}
+            {activeDataset.row_count?.toLocaleString() ?? "—"} · Updated{" "}
+            {formatRelativeTime(activeDataset.end_date)}
           </span>
         </div>
       </div>

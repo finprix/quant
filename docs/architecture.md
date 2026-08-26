@@ -70,21 +70,54 @@ stepper runs to completion in a background task. Proven by
 `test_background_import.py` (27 checks), including simulated instance
 loss (`_JOBS` wiped between steps) and mid-stream outage recovery.
 
-## Access model (v0.12.0)
+## Web-first market layer (v0.20.0 FINPRIX)
 
-Quant Vector opens on the ACCESS GATE with two roles:
+v0.20.0 inverts the product's center of gravity: instead of *dataset →
+analysis*, Finprix is **symbol → provider → validated history → cached
+dataset → engines → UI**. `market_web.py` implements this on top of the
+existing provider abstraction:
+
+- **Boards** — `GET /market/global`, `/market/movers`, `/sectors` fetch an
+  entire curated universe (indices across US/India/Europe/Asia,
+  commodities, FX, crypto, liquid equities, sector ETFs) in ONE batched
+  provider call (`_fetch_batch`) and derive price/change/volume from real
+  bars. In-process TTL caches: 60 s boards, 30 min sectors. Unavailable
+  symbols degrade per-row; nothing is invented.
+- **Bootstrap** — `GET /asset/{symbol}` resolves the instrument via
+  provider search, then `ensure_symbol_dataset()`: reuse the cached
+  dataset for that symbol, incrementally refresh it when stale (> 4 days),
+  or import a fresh two-year history through the normal validated
+  pipeline. The response carries dataset id, live quote, coverage and per-
+  engine readiness so the UI can stage progress truthfully.
+- **News** — `GET /market/news?category=` aggregates pass-through provider
+  headlines from representative instruments per category (plus user
+  symbols), derives trending-symbol counts, and caches briefly (120 s).
+
+The database remains fully functional but is now an implementation detail:
+cache, persistence and research layers. Normal users never see table or
+dataset ids on public surfaces.
+
+## Access model (v0.20.0)
+
+Finprix is public: there is no login, guest screen or log-out anywhere in
+the product — every read surface works anonymously. The historical PIN
+infrastructure survives purely server-side for administrative endpoints
+(delete dataset, database maintenance, SQL console, watchlist mutation);
+without a session cookie these receive 401 as before, and no UI exposes
+them. CSV upload remains available for private research via DATA.
+
+Server-side role matrix (unchanged from v0.12.0; no login UI since v0.20.0):
 
 ```
-GUEST  (research mode)            DEVELOPER (research + administration)
-─────────────────────────         ─────────────────────────────────────
-all analysis pages                everything guest can do, plus:
-database inspector (read-only)      POST /upload                (CSV)
-price history & metadata            POST /market/import         (Yahoo)
-AI research & reports               POST /market/update/{id}    (incremental)
-                                    DELETE /datasets/{id}
-                                    preset create/update/delete
-                                    POST /database/integrity    (maintenance)
-                                    POST /database/query        (read-only SQL console)
+ANONYMOUS (everyone, in-product)   DEVELOPER (session cookie only; API/admin)
+────────────────────────────────   ─────────────────────────────────────────
+all market/analysis/news pages       POST /upload                (CSV)
+asset overview + bootstrap           POST /market/import         (Yahoo)
+database inspector (read-only)       POST /market/update/{id}    (incremental)
+AI research & reports                DELETE /datasets/{id}
+watchlist reads                      preset create/update/delete
+news feeds                           POST /database/integrity    (maintenance)
+                                     POST /database/query        (read-only SQL console)
 ```
 
 Authorization is enforced by a reusable FastAPI dependency —

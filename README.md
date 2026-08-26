@@ -1,13 +1,22 @@
-# QUANT VECTOR
+# FINPRIX
 
-**A Quantitative Engine for Statistical Fingerprinting, Regime Discovery and Historical
-Analogue Detection in Financial Time Series**
+**A Web-First Quantitative Market Intelligence Terminal — Global Market Discovery,
+Statistical Fingerprinting, Historical Analogues and Regime Discovery**
 
-QUANT VECTOR lets you upload historical OHLCV market data and explore it through a set of
-classical, deterministic quantitative techniques: a statistical "fingerprint" of each
-dataset, searches for similar historical windows (analogues), unsupervised discovery of
-market regimes with PCA + KMeans, a fused intelligence scorecard, cross-market correlation
-and regression analysis, and an exportable research report.
+FINPRIX (v0.20.0) opens directly onto a global market command center: live indices,
+commodities, FX and crypto across US, India, Europe and Asia, professional news
+aggregation, cross-asset context — and one-click entry into the quantitative engine.
+Pick any public symbol (`NVDA`, `^NSEI`, `BTC-USD`, `EURUSD=X`) and Finprix resolves it,
+fetches and validates its history, caches it, and runs the full analysis pipeline
+automatically. Custom CSV datasets remain supported for private research.
+
+The quantitative core is unchanged and deterministic:
+
+- a statistical **fingerprint** of every market's history,
+- searches for **historical analogues** — similar past windows and what followed,
+- unsupervised **regime discovery** with PCA + KMeans,
+- a fused, explainable **intelligence scorecard**,
+- cross-market correlation/regression research and an exportable report.
 
 > **This project is descriptive, not predictive.** Every number explains what happened in
 > the past. It is an educational DBMS + analytics project, not investment advice.
