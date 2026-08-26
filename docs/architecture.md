@@ -46,6 +46,30 @@ Every analysis loads observations through `database.get_prices()` — never from
 a provider response held in memory. `test_roundtrip.py` proves analysis works
 after the original provider DataFrame is destroyed.
 
+## Stepped ingestion (v0.18.0)
+
+Long symbol imports cannot rely on background threads on serverless
+platforms: once the HTTP response returns, the function may be frozen or
+reclaimed, silently killing an in-flight download. Imports are therefore
+a **client-stepped state machine** persisted in `ingestion_jobs`:
+
+```
+POST /market/import            -> job QUEUED (request + cursor persisted)
+POST /market/import/step  ...  -> one provider window per call (IMPORT_CHUNK_DAYS)
+                                 FETCHING -> VALIDATING -> WRITING -> next window
+GET /market/import/status      -> snapshot (in-process registry, else storage)
+```
+
+Invariants: the resume cursor advances only after a chunk is durably
+stored (a crashed step retries its exact window); dataset metadata is
+refreshed after every chunk, so even a half-imported dataset has
+consistent rollups; the first step attaches to a prior import of the
+same instrument and short-circuits when stored history already covers
+the requested range — without touching the provider. Locally, the same
+stepper runs to completion in a background task. Proven by
+`test_background_import.py` (27 checks), including simulated instance
+loss (`_JOBS` wiped between steps) and mid-stream outage recovery.
+
 ## Access model (v0.12.0)
 
 Quant Vector opens on the ACCESS GATE with two roles:

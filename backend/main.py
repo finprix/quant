@@ -68,7 +68,7 @@ async def lifespan(_):
     yield
 
 
-app = FastAPI(title="QUANT VECTOR API", version="0.17.0", lifespan=lifespan)
+app = FastAPI(title="QUANT VECTOR API", version="0.18.0", lifespan=lifespan)
 
 _ALLOWED_ORIGINS = [
     origin.strip()
@@ -954,22 +954,34 @@ async def market_import(payload: dict = Body(...), background: BackgroundTasks =
             "currency": payload.get("currency"),
         }
     )
-    background.add_task(
-        market_ingest.run_import_job,
-        job["job_id"],
-        {
-            "symbol": symbol,
-            "start_date": start_date,
-            "end_date": end_date,
-            "interval": interval,
-            "provider": provider_name,
-            "name": payload.get("name"),
-            "exchange": payload.get("exchange"),
-            "asset_type": payload.get("asset_type"),
-            "currency": payload.get("currency"),
-        },
-    )
-    return {"job_id": job["job_id"], "status_url": f"/market/import/status/{job['job_id']}"}
+    if not os.environ.get("VERCEL"):
+        # Local/single-process mode: drive the job in the background for
+        # curl-style callers. On Vercel the client steps the job instead
+        # via /market/import/step, because lambdas freeze once the
+        # response returns and background tasks would be killed.
+        background.add_task(market_ingest.run_import_job, job["job_id"])
+    return {"job_id": job["job_id"], "status_url": f"/market/import/status/{job['job_id']}", "step_url": "/market/import/step"}
+
+
+@app.post("/market/import/step", dependencies=[Depends(require_developer)])
+def market_import_step(payload: dict = Body(...)):
+    """Advance one bounded chunk of an import job (serverless-safe).
+
+    Body: {job_id}. Each call performs at most one provider fetch window
+    (IMPORT_CHUNK_DAYS calendar days) and persists the resume cursor
+    before returning. Repeat until status is COMPLETE or FAILED; a FAILED
+    step can be retried — it re-fetches the same window.
+    """
+    job_id = str(payload.get("job_id") or "").strip()
+    if not job_id:
+        raise HTTPException(status_code=422, detail="'job_id' is required.")
+    try:
+        snapshot = market_ingest.advance_import_step(job_id)
+    except Exception as exc:
+        raise _market_error(exc)
+    if snapshot is None:
+        raise HTTPException(status_code=404, detail=f"Unknown import job '{job_id}'.")
+    return snapshot
 
 
 @app.get("/market/import/status/{job_id}")

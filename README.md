@@ -257,13 +257,22 @@ Date,Open,High,Low,Close,Volume
 | AI (optional) | `GET /ai/status`, `POST /ai/query` |
 | Auth (v0.12.0) | `POST /auth/login`, `POST /auth/logout`, `GET /auth/session` — HTTP-only signed session cookie, backend-verified developer credentials |
 | Watchlist (v0.16.0) | \GET /watchlist\ (quotes merged), \POST /watchlist\ 🔒, \DELETE /watchlist/{symbol}\ 🔒 — tracked symbols persisted in libSQL |
-| Market data | `GET /market/search?q=&provider=`, `POST /market/import` 🔒, `GET /market/import/status/{job_id}`, `POST /market/update/{dataset_id}` 🔒, `GET /market/overview` |
+| Market data | `GET /market/search?q=&provider=`, `POST /market/import` 🔒, `POST /market/import/step` 🔒 (v0.18.0), `GET /market/import/status/{job_id}`, `POST /market/update/{dataset_id}` 🔒, `GET /market/overview` |
 | Database inspector (read-only) | `GET /database/status`, `GET /database/stats`, `GET /database/tables`, `GET /database/tables/{table}`, `GET /database/tables/{table}/schema`, `GET /database/datasets/{id}/storage`, `POST /database/integrity` 🔒 |
 | SQL console (v0.12.1, developer) | `POST /database/query` 🔒 — one validated read-only statement per call (`SELECT`/`WITH`/`SHOW`/`DESCRIBE`/`EXPLAIN`); session is `READ ONLY` server-side, mutations rejected 422, max 500 rows |
 
 🔒 = requires a developer session (guest requests receive 401). Dataset
 mutation endpoints (`POST /upload`, `DELETE /datasets/{id}`, preset
 create/update/delete) are protected the same way.
+
+**Stepped imports (v0.18.0).** `POST /market/import` only registers a
+QUEUED job. The caller then advances it one bounded chunk at a time via
+`POST /market/import/step {job_id}` until the status is `COMPLETE` or
+`FAILED`. Each step fetches at most `IMPORT_CHUNK_DAYS` calendar days
+(default 380) and persists the resume cursor, so multi-year downloads
+survive serverless request timeouts and instance loss; a failed step
+retries its exact window on the next call. Locally (no `VERCEL` env var)
+the job is also driven automatically in the background for convenience.
 
 Interactive docs at `/docs` (Swagger UI).
 

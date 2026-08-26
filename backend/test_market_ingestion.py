@@ -234,13 +234,28 @@ def test_validation_errors():
 
         saved = fake.frame
         fake.frame = None  # provider outage
+
+        # Fully-covered re-import must short-circuit BEFORE any network
+        # call: stored history already covers the window, so the job
+        # completes as "current" even while the provider is offline.
         r = client.post("/market/import", json={
             "symbol": "FAKE", "start_date": "2022-01-03",
             "end_date": "2022-03-01", "provider": "fake"})
         s = client.get(f"/market/import/status/{r.json()['job_id']}").json()
+        check("already-current skips dead provider",
+              s["status"] == "COMPLETE"
+              and s["result"]["status"] == "current",
+              str(s)[:220])
+
+        # A range extending past stored history forces a real fetch, so
+        # the outage now surfaces as FAILED.
+        r = client.post("/market/import", json={
+            "symbol": "FAKE", "start_date": "2022-01-03",
+            "end_date": "2023-06-30", "provider": "fake"})
+        s = client.get(f"/market/import/status/{r.json()['job_id']}").json()
         check("provider failure surfaces FAILED status",
               s["status"] == "FAILED" and "no data configured" in (s["error"] or ""),
-              str(s))
+              str(s)[:220])
         fake.frame = saved
 
 

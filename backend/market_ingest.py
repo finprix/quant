@@ -10,11 +10,14 @@ Pipeline (Phase E contract):
             -> invalidate affected analysis caches
             -> return dataset id
 
-Import jobs run through FastAPI BackgroundTasks so large downloads never
-block the HTTP response; progress is a stage-based state machine stored in
-an in-process registry (Quant Vector is a single-process research tool).
+Import jobs execute as bounded, resumable steps: every
+/market/import/step request performs at most one provider fetch window and
+persists its resume cursor, so multi-year downloads survive serverless
+request timeouts and instance loss. Locally, run_import_job() drives the
+identical stepper in a background task.
 """
 
+import os
 import threading
 from datetime import date, timedelta
 
@@ -274,15 +277,22 @@ def _next_day(value):
 _STAGES = ("FETCHING", "VALIDATING", "WRITING TO MYSQL", "PREPARING DATASET")
 _JOBS = {}
 _JOBS_LOCK = threading.Lock()
+_JOB_LOCKS = {}
+_JOB_LOCKS_GUARD = threading.Lock()
+
+# Serverless-safe chunking: every /market/import/step request performs at
+# most one provider fetch covering this many calendar days, so no single
+# request can outlive a platform timeout regardless of the requested range.
+_CHUNK_DAYS = max(30, int(os.environ.get("IMPORT_CHUNK_DAYS", "380") or 380))
 
 
 def _persist_job(job):
     """Mirror one job snapshot into MySQL (best effort).
 
-    Serverless platforms may route the status poll to a different instance
-    than the one running the import thread, so job state is persisted to
-    the ingestion_jobs table as well as the in-process registry. A storage
-    failure must never break an ongoing import, hence the broad except.
+    Serverless platforms may route any call to a different instance than
+    the previous one, so job state is persisted to the ingestion_jobs
+    table as well as the in-process registry. A storage failure must
+    never break an ongoing import, hence the broad except.
     """
     try:
         database.upsert_ingestion_job(job)
@@ -290,29 +300,82 @@ def _persist_job(job):
         pass
 
 
+def _job_lock(job_id):
+    with _JOB_LOCKS_GUARD:
+        lock = _JOB_LOCKS.get(job_id)
+        if lock is None:
+            lock = threading.Lock()
+            _JOB_LOCKS[job_id] = lock
+        return lock
+
+
 def create_import_job(payload):
+    """Register an import job in QUEUED state (serverless-resumable).
+
+    The full request payload and the resume cursor live inside result,
+    which is persisted after every step — any instance can pick the job
+    up exactly where the last one left off.
+    """
     import uuid
 
     job_id = uuid.uuid4().hex[:12]
+    start = payload["start_date"]
+    end = payload["end_date"]
+
+    def iso(value):
+        return value.isoformat() if hasattr(value, "isoformat") else str(value)
+
+    request = {
+        "symbol": str(payload["symbol"]).upper(),
+        "start_date": iso(start),
+        "end_date": iso(end),
+        "interval": payload.get("interval", "1d"),
+        "provider": payload.get("provider") or "yahoo",
+        "name": payload.get("name"),
+        "exchange": payload.get("exchange"),
+        "asset_type": payload.get("asset_type"),
+        "currency": payload.get("currency"),
+    }
     with _JOBS_LOCK:
         _JOBS[job_id] = {
             "job_id": job_id,
-            "status": "FETCHING",
-            "stage": "FETCHING",
-            "symbol": payload.get("symbol"),
-            "provider": payload.get("provider") or "yahoo",
+            "status": "QUEUED",
+            "stage": "QUEUED",
+            "symbol": request["symbol"],
+            "provider": request["provider"],
             "observations": None,
-            "result": None,
+            "result": {
+                "phase": "queued",
+                "request": request,
+                "cursor": request["start_date"],
+                "chunks_done": 0,
+                "rows_added_total": 0,
+                "replaced_total": 0,
+                "received_total": 0,
+                "valid_total": 0,
+                "rejected_total": 0,
+                "dataset_id": None,
+                "last_stored_date": None,
+            },
             "error": None,
         }
         _persist_job(_JOBS[job_id])
-    return _JOBS[job_id]
+    return dict(_JOBS[job_id])
 
 
-def run_import_job(job_id, payload):
-    """BackgroundTask body wrapper: always mirrors the final job state."""
+def run_import_job(job_id, payload=None):
+    """Drive an import to completion inside one process (local mode).
+
+    On serverless the client advances the same state machine one bounded
+    step at a time via advance_import_step(); this loop simply calls that
+    identical stepper until it reports a terminal state.
+    """
     try:
-        return _run_import_job(job_id, payload)
+        for _ in range(10000):
+            snapshot = advance_import_step(job_id)
+            if snapshot is None or snapshot.get("status") in ("COMPLETE", "FAILED"):
+                return snapshot
+        return advance_import_step(job_id)
     finally:
         with _JOBS_LOCK:
             job = _JOBS.get(job_id)
@@ -320,149 +383,164 @@ def run_import_job(job_id, payload):
             _persist_job(job)
 
 
-def _run_import_job(job_id, payload):
-    """BackgroundTask body: drives one import through its stages."""
+def advance_import_step(job_id):
+    """Advance one bounded chunk of an import job; serverless-safe.
+
+    The provider call happens inside the calling request, and all steering
+    state (cursor, dataset id, running totals) is persisted before the
+    response returns, so the job survives instance loss between steps.
+    A failed step leaves the cursor untouched, so simply calling step
+    again retries the exact same window once the provider recovers.
+    Returns the job snapshot, or None for an unknown job id.
+    """
+    with _job_lock(job_id):
+        job = _load_job(job_id)
+        if job is None:
+            return None
+        result = job.get("result")
+        if not isinstance(result, dict) or not result.get("request"):
+            return dict(job)  # legacy job shape predating the stepper
+        if result.get("phase") == "complete":
+            return dict(job)
+        try:
+            _advance_chunk(job)
+        except Exception as exc:
+            job["result"]["phase"] = "failed"
+            with _JOBS_LOCK:
+                job["status"] = "FAILED"
+                job["stage"] = "FAILED"
+                job["error"] = str(exc)
+            _persist_job(job)
+        return dict(job)
+
+
+def _load_job(job_id):
+    """Return the live job dict, reconstructing from storage when needed."""
     with _JOBS_LOCK:
         job = _JOBS.get(job_id)
-    if job is None:
+    if job is not None:
+        return job
+    try:
+        persisted = database.get_ingestion_job(job_id)
+    except Exception:
+        return None
+    if persisted is None:
+        return None
+    job = {
+        "job_id": persisted["job_id"],
+        "status": persisted["status"],
+        "stage": persisted["stage"],
+        "symbol": persisted.get("symbol"),
+        "provider": persisted.get("provider"),
+        "observations": persisted.get("observations"),
+        "result": persisted.get("result"),
+        "error": persisted.get("error"),
+    }
+    with _JOBS_LOCK:
+        existing = _JOBS.setdefault(job_id, job)
+    return existing
+
+
+def _publish_stage(job, stage):
+    with _JOBS_LOCK:
+        job["stage"] = stage
+        job["status"] = stage
+    _persist_job(job)
+
+
+def _refresh_dataset_rollup(dataset_id):
+    """Recompute dataset metadata from every stored price row."""
+    all_rows = database.get_prices(dataset_id)
+    full_frame = dataframe_from_price_records(all_rows)
+    rollup = _summary_from_frame(full_frame)
+    database.update_dataset_metadata(
+        dataset_id,
+        end_date=rollup["end_date"],
+        row_count=rollup["row_count"],
+        latest_close=rollup["latest_close"],
+    )
+    return rollup
+
+
+def _advance_chunk(job):
+    """Perform at most one provider fetch window for this job."""
+    result = job["result"]
+    request = result["request"]
+    cursor = date.fromisoformat(result["cursor"])
+    end = date.fromisoformat(request["end_date"])
+
+    provider = get_provider(request["provider"])
+    dataset_id = result.get("dataset_id")
+
+    # First step: attach to an existing import of the same instrument, or
+    # short-circuit when stored history already covers the whole range.
+    if dataset_id is None and result.get("chunks_done", 0) == 0:
+        existing = find_existing_import(provider.name, request["symbol"])
+        if existing is not None:
+            last = database.get_last_price_date(existing["dataset_id"])
+            if last is not None and last >= end:
+                result["dataset_id"] = existing["dataset_id"]
+                _finalize_complete(
+                    job, provider, request,
+                    message="History already current.",
+                    rows_added=0,
+                )
+                return
+            result["dataset_id"] = existing["dataset_id"]
+            dataset_id = existing["dataset_id"]
+
+    if cursor > end:
+        _finalize_complete(job, provider, request)
         return
 
-    def advance(stage, **extra):
-        with _JOBS_LOCK:
-            job["stage"] = stage
-            job["status"] = stage
-            job.update(extra)
-        _persist_job(job)
+    chunk_end = min(cursor + timedelta(days=_CHUNK_DAYS - 1), end)
+    _publish_stage(job, "FETCHING")
+    frame = provider.fetch(
+        request["symbol"],
+        cursor,
+        chunk_end,
+        interval=request.get("interval", "1d"),
+    )
+    norm = _normalization_stats(frame)
 
-    try:
-        advance("FETCHING")
-        provider = get_provider(payload.get("provider"))
-        frame = provider.fetch(
-            payload["symbol"],
-            payload["start_date"],
-            payload["end_date"],
-            interval=payload.get("interval", "1d"),
-        )
-        norm = _normalization_stats(frame)
-        observations = len(frame)
-        advance(
-            "VALIDATING",
-            observations=observations,
-            details={
-                "received": norm["received_raw"],
-                "valid": norm["valid"],
-                "rejected": norm["rejected"],
-                "unparseable_ohlc_removed": norm["unparseable_ohlc_removed"],
-                "duplicate_dates_removed": norm["duplicate_dates_removed"],
-                "invalid_candles_removed": norm["invalid_candles_removed"],
-            },
-        )
+    def bump_totals():
+        result["received_total"] += norm["received_raw"]
+        result["valid_total"] += norm["valid"]
+        result["rejected_total"] += norm["rejected"]
 
-        advance("WRITING TO MYSQL")
-        existing = find_existing_import(provider.name, payload["symbol"])
-        if existing is not None:
-            dataset_id = existing["dataset_id"]
-            last_date = database.get_last_price_date(dataset_id)
-            fetch_start = payload["start_date"]
-            if last_date is not None:
-                nxt = _next_day(last_date)
-                if nxt > payload["end_date"]:
-                    with _JOBS_LOCK:
-                        job.update(
-                            status="COMPLETE",
-                            stage="COMPLETE",
-                            result={
-                                "status": "current",
-                                "dataset_id": dataset_id,
-                                "rows_added": 0,
-                                "message": "History already current.",
-                            },
-                        )
-                    return
-                # Include the boundary session so stale provisional bars heal.
-                fetch_start = min(payload["start_date"], last_date)
-            added_rows = to_price_rows(frame)
-            if not added_rows:
-                with _JOBS_LOCK:
-                    job.update(
-                        status="COMPLETE",
-                        stage="COMPLETE",
-                        result={
-                            "status": "current",
-                            "dataset_id": dataset_id,
-                            "rows_added": 0,
-                            "message": "No new observations.",
-                        },
-                    )
-                return
-            outcome = database.replace_price_rows_from(
-                dataset_id, added_rows, fetch_start
-            )
-            added = outcome["added"]
-            replaced = outcome["replaced"]
-            all_rows = database.get_prices(dataset_id)
-            full_frame = dataframe_from_price_records(all_rows)
-            rollup = _summary_from_frame(full_frame)
-            database.update_dataset_metadata(
-                dataset_id,
-                end_date=rollup["end_date"],
-                row_count=rollup["row_count"],
-                latest_close=rollup["latest_close"],
-            )
-            database.delete_analysis_caches(dataset_id)
-            src = database.get_dataset_source(dataset_id)
-            database.upsert_dataset_source(
-                dataset_id=dataset_id,
-                provider=src["provider"],
-                symbol=src["symbol"],
-                instrument_name=src.get("instrument_name"),
-                exchange=src.get("exchange"),
-                asset_type=src.get("asset_type"),
-                currency=src.get("currency"),
-                price_interval=src.get("price_interval", "1d"),
-            )
-            with _JOBS_LOCK:
-                job.update(
-                    status="COMPLETE",
-                    stage="COMPLETE",
-                    result={
-                        "status": "updated" if added else "current",
-                        "dataset_id": dataset_id,
-                        "rows_added": added,
-                        "last_date": rollup["end_date"].isoformat(),
-                        "message": f"Added {added} new observation(s)."
-                        if added
-                        else "No new observations.",
-                        "receipt": {
-                            "provider": provider.name,
-                            "symbol": src["symbol"],
-                            "instrument_name": src.get("instrument_name"),
-                            "interval": src.get("price_interval", "1d"),
-                            "request_range": {
-                                "start": str(payload["start_date"]),
-                                "end": str(payload["end_date"]),
-                            },
-                            "received": norm["received_raw"],
-                            "valid": norm["valid"],
-                            "rejected": norm["rejected"],
-                            "fetched": len(added_rows),
-                            "inserted": added,
-                            "replaced": replaced,
-                            "unchanged": max(
-                                0, len(added_rows) - replaced - added
-                            ),
-                            "last_stored_date": rollup["end_date"].isoformat(),
-                            "caches_invalidated": list(_CACHE_LABELS),
-                        },
-                    },
-                )
-            return
+    def advance_cursor():
+        result["cursor"] = (chunk_end + timedelta(days=1)).isoformat()
+        result["chunks_done"] = result.get("chunks_done", 0) + 1
 
-        advance("PREPARING DATASET")
+    if len(frame) == 0:
+        if dataset_id is None:
+            raise InvalidSymbol(
+                f"No observations for '{request['symbol']}' between "
+                f"{request['start_date']} and {chunk_end.isoformat()}."
+            )
+        bump_totals()
+        advance_cursor()
+        _finalize_complete(job, provider, request)
+        return
+
+    _publish_stage(job, "VALIDATING")
+    price_rows = to_price_rows(frame)
+    if not price_rows:
+        if dataset_id is None:
+            raise DataSourceUnavailable(
+                "Provider returned data but no rows survived validation."
+            )
+        bump_totals()
+        advance_cursor()
+        _finalize_complete(job, provider, request)
+        return
+
+    _publish_stage(job, "WRITING TO MYSQL")
+    fetch_start = frame["Date"].min().date()
+    if dataset_id is None:
         rollup = _summary_from_frame(frame)
-        price_rows = to_price_rows(frame)
         dataset_id = database.store_dataset(
-            filename=f"{payload['symbol'].upper()}_{payload.get('interval', '1d')}.csv",
+            filename=f"{request['symbol']}_{request.get('interval', '1d')}.csv",
             start_date=rollup["start_date"],
             end_date=rollup["end_date"],
             row_count=rollup["row_count"],
@@ -473,48 +551,118 @@ def _run_import_job(job_id, payload):
         database.upsert_dataset_source(
             dataset_id=dataset_id,
             provider=provider.name,
-            symbol=str(payload["symbol"]).upper(),
-            instrument_name=payload.get("name"),
-            exchange=payload.get("exchange"),
-            asset_type=payload.get("asset_type"),
-            currency=payload.get("currency"),
-            price_interval=payload.get("interval", "1d"),
+            symbol=request["symbol"],
+            instrument_name=request.get("name"),
+            exchange=request.get("exchange"),
+            asset_type=request.get("asset_type"),
+            currency=request.get("currency"),
+            price_interval=request.get("interval", "1d"),
         )
+        outcome = {"added": rollup["row_count"], "replaced": 0}
+    else:
+        outcome = database.replace_price_rows_from(
+            dataset_id, price_rows, fetch_start
+        )
+
+    # Only now — after the window is durably stored — move the cursor, so
+    # a crash mid-write makes the next step retry this exact window.
+    rollup = _refresh_dataset_rollup(dataset_id)
+    database.delete_analysis_caches(dataset_id)
+    bump_totals()
+    advance_cursor()
+
+    result["dataset_id"] = dataset_id
+    result["rows_added_total"] += outcome["added"]
+    result["replaced_total"] += outcome["replaced"]
+    result["last_stored_date"] = rollup["end_date"].isoformat()
+    result["observations"] = rollup["row_count"]
+    with _JOBS_LOCK:
+        job["observations"] = rollup["row_count"]
+
+    if date.fromisoformat(result["cursor"]) > end:
+        _finalize_complete(job, provider, request)
+    else:
+        _publish_stage(job, "FETCHING")
+
+
+def _finalize_complete(job, provider, request, message=None, rows_added=None):
+    """Mark a job COMPLETE and assemble its final receipt."""
+    result = job["result"]
+    dataset_id = result.get("dataset_id")
+    readiness = None
+    total_added = (
+        rows_added if rows_added is not None else result.get("rows_added_total", 0)
+    )
+    if dataset_id is not None:
+        rollup = _refresh_dataset_rollup(dataset_id)
+        database.delete_analysis_caches(dataset_id)
+        src = database.get_dataset_source(dataset_id)
+        database.upsert_dataset_source(
+            dataset_id=dataset_id,
+            provider=src["provider"],
+            symbol=src["symbol"],
+            instrument_name=src.get("instrument_name"),
+            exchange=src.get("exchange"),
+            asset_type=src.get("asset_type"),
+            currency=src.get("currency"),
+            price_interval=src.get("price_interval", "1d"),
+        )
+        result["last_stored_date"] = rollup["end_date"].isoformat()
+        result["observations"] = rollup["row_count"]
         readiness = _analysis_readiness(rollup["row_count"])
         with _JOBS_LOCK:
-            job.update(
-                status="COMPLETE",
-                stage="COMPLETE",
-                result={
-                    "status": "complete",
-                    "dataset_id": dataset_id,
-                    "rows_added": rollup["row_count"],
-                    "start_date": rollup["start_date"].isoformat(),
-                    "end_date": rollup["end_date"].isoformat(),
-                    "latest_close": rollup["latest_close"],
-                    "receipt": {
-                        "provider": provider.name,
-                        "symbol": str(payload["symbol"]).upper(),
-                        "instrument_name": payload.get("name"),
-                        "interval": payload.get("interval", "1d"),
-                        "received": norm["received_raw"],
-                        "valid": norm["valid"],
-                        "rejected": norm["rejected"],
-                        "inserted": rollup["row_count"],
-                        "replaced": 0,
-                        "duplicates": 0,
-                        "mysql": {
-                            "dataset_record": True,
-                            "source_metadata": True,
-                            "price_observations": len(price_rows),
-                        },
-                        "analysis": readiness,
-                    },
-                },
-            )
-    except Exception as exc:
-        with _JOBS_LOCK:
-            job.update(status="FAILED", stage="FAILED", error=str(exc))
+            job["observations"] = rollup["row_count"]
+
+    final_message = message or (
+        f"Added {total_added} new observation(s)."
+        if total_added
+        else "No new observations."
+    )
+    receipt = {
+        "provider": provider.name,
+        "symbol": request["symbol"],
+        "instrument_name": request.get("name"),
+        "interval": request.get("interval", "1d"),
+        "request_range": {
+            "start": request["start_date"],
+            "end": request["end_date"],
+        },
+        "received": result.get("received_total", 0),
+        "valid": result.get("valid_total", 0),
+        "rejected": result.get("rejected_total", 0),
+        "fetched": result.get("valid_total", 0),
+        "inserted": total_added,
+        "replaced": result.get("replaced_total", 0),
+        "unchanged": max(
+            0,
+            result.get("received_total", 0)
+            - result.get("replaced_total", 0)
+            - total_added,
+        ),
+        "last_stored_date": result.get("last_stored_date"),
+        "caches_invalidated": list(_CACHE_LABELS),
+        "mysql": {
+            "dataset_record": dataset_id is not None,
+            "source_metadata": dataset_id is not None,
+            "price_observations": result.get("observations") or 0,
+        },
+        "analysis": readiness,
+        "mode": "stepped",
+        "chunks": result.get("chunks_done", 0),
+    }
+    final_result = {
+        "phase": "complete",
+        "status": "current" if total_added == 0 else "complete",
+        "dataset_id": dataset_id,
+        "rows_added": total_added,
+        "message": final_message,
+        "receipt": receipt,
+    }
+    with _JOBS_LOCK:
+        job["status"] = "COMPLETE"
+        job["stage"] = "COMPLETE"
+        job["result"] = final_result
+    _persist_job(job)
 
 
 def get_import_job(job_id):
@@ -524,7 +672,7 @@ def get_import_job(job_id):
         # Return a snapshot without internal locks.
         return dict(job)
     # Serverless fallback: this instance may not be the one that ran the
-    # import thread — recover the persisted state from MySQL instead.
+    # previous step — recover the persisted state from MySQL instead.
     try:
         return database.get_ingestion_job(job_id)
     except Exception:

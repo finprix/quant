@@ -45,13 +45,24 @@ export default function useSymbolImport({ onComplete } = {}) {
         });
         const jobId = started.job_id;
         let finalStatus = null;
-        for (let i = 0; i < 90; i += 1) {
+        // Each step fetches at most IMPORT_CHUNK_DAYS of history inside a
+        // single request, so even multi-year imports survive serverless
+        // function timeouts. The bound below only guards against a stuck
+        // loop; normal imports finish in a handful of steps.
+        const spanDays = Math.max(
+          1,
+          Math.round((new Date(end) - new Date(start)) / 86_400_000),
+        );
+        const maxSteps = Math.ceil(spanDays / 60) + 16;
+        for (let i = 0; i < maxSteps; i += 1) {
           // eslint-disable-next-line no-await-in-loop
-          await new Promise((r) => setTimeout(r, 1200));
-          const status = await request(`/market/import/status/${jobId}`);
-          setStage(status.stage || status.status);
-          if (status.status === "COMPLETE" || status.status === "FAILED") {
-            finalStatus = status;
+          const snap = await request("/market/import/step", {
+            method: "POST",
+            body: { job_id: jobId },
+          });
+          setStage(snap.stage || snap.status);
+          if (snap.status === "COMPLETE" || snap.status === "FAILED") {
+            finalStatus = snap;
             break;
           }
         }
