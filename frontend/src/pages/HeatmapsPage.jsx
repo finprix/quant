@@ -1,7 +1,7 @@
 import { Fragment, useMemo, useState } from "react";
 import { useDatasets } from "../context/DatasetContext.jsx";
 import { useApiData } from "../hooks/useApiData.js";
-import { SectionHeader, TerminalPanel } from "../components/common/Panels.jsx";
+import { TerminalPanel } from "../components/common/Panels.jsx";
 import {
   LoadingState,
   ErrorState,
@@ -98,7 +98,7 @@ function HeatGrid({ matrix, mode }) {
 }
 
 export default function HeatmapsPage() {
-  const { activeId, activeDataset } = useDatasets();
+  const { activeId } = useDatasets();
   const [layer, setLayer] = useState("timexmetric");
   const [buckets, setBuckets] = useState(60);
 
@@ -128,8 +128,10 @@ export default function HeatmapsPage() {
 
   if (!activeId) {
     return (
-      <div className="page">
-        <SectionHeader title="Market Heatmaps" />
+      <div className="analysis-view">
+        <div className="view-head">
+          <span className="view-title mono">MARKET HEATMAPS</span>
+        </div>
         <NoDatasetState />
       </div>
     );
@@ -188,11 +190,13 @@ export default function HeatmapsPage() {
   }
 
   return (
-    <div className="page">
-      <SectionHeader
-        title="Market Heatmaps"
-        desc={`Statistical surfaces over ${activeDataset?.filename ?? "dataset"} — every cell derived from genuine backend data.`}
-      />
+    <div className="analysis-view">
+      <div className="view-head">
+        <span className="view-title mono">MARKET HEATMAPS</span>
+        <span className="view-desc fineprint">
+          Statistical surfaces — every cell derived from genuine backend data.
+        </span>
+      </div>
 
       <TerminalPanel flush>
         <div className="panel-body" style={{ display: "flex", gap: 18, alignItems: "center", flexWrap: "wrap" }}>

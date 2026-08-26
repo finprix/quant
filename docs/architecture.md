@@ -144,6 +144,41 @@ separate API host), and `MARKETDNA_ALLOWED_ORIGINS` for CORS.
 Supporting files: `test_*.py` self-test suites (run directly, in-process TestClient against real
 libSQL/Turso), `benchmark_phase8.py` performance harness, `.env.example`, `requirements.txt`.
 
+## Frontend page ownership (v0.19.0)
+
+Every frontend page has one clear owner and one clear job. The product
+hierarchy is DISCOVER → ANALYZE → RESEARCH → DATA.
+
+```
+DISCOVER
+  Overview (/)       Command center: global search, watchlist (regime + evidence),
+                     current analysis (chart + stats + open link), recent analyses,
+                     market news.
+  Markets (/markets) Discovery-only: live quotes table, movers, track form, news.
+
+ANALYZE  (/analysis/{view}?dataset=N)
+  AssetContextBar    Shared across all tabs: symbol, dataset metadata, live quote,
+                     dataset selector (combines library + universe).
+  Fingerprint        Statistical DNA tables and metric tiles.
+  Analogues          Historical period matching with overlay charts.
+  Regimes            PCA/KMeans regime discovery, timeline, transition matrix.
+  Intelligence       Evidence fusion scorecard, bias, regime context.
+  Heatmaps           Time×Metric, Horizon, Regime, Analogue heatmaps.
+
+RESEARCH
+  Compare (/compare)   Pairwise fingerprint comparison + correlation.
+  AI Assistant (/ai)   LLM-driven quantitative analyst.
+  Report (/report)     Print/PDF export of analysis.
+
+DATA
+  Datasets (/datasets)   Library, CSV upload, Yahoo import, managed assets.
+  Database (/database)   Live libSQL/Turso inspector.
+```
+
+Rule: the shell (AnalysisLayout + AssetContextBar) owns dataset identity and
+navigation. Individual analysis views never render their own dataset header —
+they own only their content panels and controls.
+
 ## Frontend areas
 
 | Area | Contents |
@@ -152,7 +187,7 @@ libSQL/Turso), `benchmark_phase8.py` performance harness, `.env.example`, `requi
 | `src/context/` | `DatasetContext`: dataset list + active-dataset id persisted to `localStorage`. |
 | `src/hooks/useApiData.js` | URL-keyed shared response cache with per-category TTLs, invalidation on mutations, single-flight dedup, parallel fetch helper (`Promise.all`). |
 | `src/components/` | App shell, charts, states (loading/error/empty), modal + confirm dialog, reusable UI primitives, `compare/*` widgets (matrices, rolling view, regression view, preset manager), `market/MarketOverviewPanel` (real multi-asset heatmap). |
-| `src/pages/` | Overview (incl. market overview heatmap), Datasets/Market Library (CSV upload + Yahoo fetch with staged import pipeline, import/update receipts and VIEW MYSQL DATA links), FingerprintPage, AnaloguesPage, RegimesPage, IntelligencePage, ComparePage (metrics + cross-market tabs), AiPage, ReportPage (print/PDF report), DatabasePage (live libSQL/Turso inspector). Larger pages are `React.lazy` code-split. |
+| `src/pages/` | **DISCOVER**: Overview (command center: search, watchlist, current analysis, recent analyses, news), Markets (discovery-only table: quotes, movers, import entry). **ANALYZE** (shared shell `/analysis/{view}?dataset=N`): FingerprintPage, AnaloguesPage, RegimesPage, IntelligencePage, HeatmapsPage — each tab-owned, no dataset headers. **RESEARCH**: ComparePage, AiPage, ReportPage. **DATA**: Datasets, DatabasePage. |
 | `src/lib/` | Formatting helpers (N/A-safe), CSV/PNG export utilities, comparison-matrix definitions. |
 | `src/styles/` | Dark "quant terminal" theme plus dedicated print stylesheet (light tokens, hidden chrome, page-break rules). |
 

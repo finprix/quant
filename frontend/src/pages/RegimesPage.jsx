@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { useDatasets } from "../context/DatasetContext.jsx";
 import { useApiData } from "../hooks/useApiData.js";
-import { SectionHeader, TerminalPanel } from "../components/common/Panels.jsx";
+import { TerminalPanel } from "../components/common/Panels.jsx";
 import MetricStrip from "../components/common/MetricStrip.jsx";
 import { RegimeBadge, StatusBadge } from "../components/common/StatusBadge.jsx";
 import {
@@ -42,7 +42,7 @@ function TransitionCell({ p }) {
 }
 
 export default function RegimesPage() {
-  const { activeId, activeDataset } = useDatasets();
+  const { activeId } = useDatasets();
   const [windowSize, setWindowSize] = useState(60);
 
   const query = useApiData(
@@ -54,8 +54,10 @@ export default function RegimesPage() {
 
   if (!activeId) {
     return (
-      <div className="page">
-        <SectionHeader title="Regime Discovery" />
+      <div className="analysis-view">
+        <div className="view-head">
+          <span className="view-title mono">REGIME DISCOVERY</span>
+        </div>
         <NoDatasetState />
       </div>
     );
@@ -63,8 +65,10 @@ export default function RegimesPage() {
 
   if (query.loading && !query.data) {
     return (
-      <div className="page">
-        <SectionHeader title="Regime Discovery" />
+      <div className="analysis-view">
+        <div className="view-head">
+          <span className="view-title mono">REGIME DISCOVERY</span>
+        </div>
         <LoadingState label="RUNNING PCA · KMEANS DISCOVERY" />
       </div>
     );
@@ -72,8 +76,10 @@ export default function RegimesPage() {
 
   if (query.error && !query.data) {
     return (
-      <div className="page">
-        <SectionHeader title="Regime Discovery" />
+      <div className="analysis-view">
+        <div className="view-head">
+          <span className="view-title mono">REGIME DISCOVERY</span>
+        </div>
         <ErrorState
           message={query.error.message}
           status={query.error.status}
@@ -86,11 +92,10 @@ export default function RegimesPage() {
   const payload = query.data;
   if (!payload.available) {
     return (
-      <div className="page">
-        <SectionHeader
-          title="Regime Discovery"
-          desc="PCA compression and KMeans clustering over sliding market windows."
-          right={
+      <div className="analysis-view">
+        <div className="view-head">
+          <span className="view-title mono">REGIME DISCOVERY</span>
+          <span className="view-badges">
             <div className="chip-row">
               {[40, 60].map((w) => (
                 <button
@@ -103,8 +108,8 @@ export default function RegimesPage() {
                 </button>
               ))}
             </div>
-          }
-        />
+          </span>
+        </div>
         <EmptyState
           title="INSUFFICIENT DATA"
           hint={payload.message || "Regime discovery requires more overlapping windows than this history provides."}
@@ -130,31 +135,29 @@ export default function RegimesPage() {
   const totalWindows = regimes.reduce((acc, r) => acc + (r.window_count ?? 0), 0) || 1;
 
   return (
-    <div className="page">
-      <SectionHeader
-        title="Regime Analysis"
-        desc={`Unsupervised market-state discovery for ${activeDataset?.filename ?? "dataset"} · window ${windowSize}D`}
-        right={
-          <>
-            <div className="chip-row">
-              {[40, 60].map((w) => (
-                <button
-                  key={w}
-                  type="button"
-                  className={`chip-btn${w === windowSize ? " active" : ""}`}
-                  onClick={() => setWindowSize(w)}
-                >
-                  WINDOW {w}
-                </button>
-              ))}
-            </div>
-            <StatusBadge tone="neutral">
-              K = {model.selected_k ?? "?"}{model.requested_k == null ? " (AUTO)" : ""}
-            </StatusBadge>
-            {payload.meta?.cached ? <StatusBadge tone="neutral">CACHED</StatusBadge> : null}
-          </>
-        }
-      />
+    <div className="analysis-view">
+      <div className="view-head">
+        <span className="view-title mono">REGIME ANALYSIS</span>
+        <span className="view-desc fineprint">{`Unsupervised market-state discovery · window ${windowSize}D`}</span>
+        <span className="view-badges">
+          <div className="chip-row">
+            {[40, 60].map((w) => (
+              <button
+                key={w}
+                type="button"
+                className={`chip-btn${w === windowSize ? " active" : ""}`}
+                onClick={() => setWindowSize(w)}
+              >
+                WINDOW {w}
+              </button>
+            ))}
+          </div>
+          <StatusBadge tone="neutral">
+            K = {model.selected_k ?? "?"}{model.requested_k == null ? " (AUTO)" : ""}
+          </StatusBadge>
+          {payload.meta?.cached ? <StatusBadge tone="neutral">CACHED</StatusBadge> : null}
+        </span>
+      </div>
 
       {/* Current regime hero */}
       <TerminalPanel title="Current Regime">

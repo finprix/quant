@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { request } from "../../api/client.js";
 import useSymbolImport from "../../hooks/useSymbolImport.js";
+import { fingerprintPath } from "../../lib/navigation.js";
 
 /**
  * Finprix-style global symbol search in the top bar.
@@ -19,7 +20,7 @@ export default function GlobalSearch() {
   const { launch, phase, stage } = useSymbolImport({
     onComplete: (datasetId) => {
       setSelected(null);
-      window.location.assign(`/fingerprint?dataset=${datasetId}`);
+      window.location.assign(fingerprintPath(datasetId));
     },
   });
 

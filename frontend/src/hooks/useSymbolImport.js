@@ -1,6 +1,7 @@
 import { useCallback, useRef, useState } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
 import { request } from "../api/client.js";
+import { fingerprintPath } from "../lib/navigation.js";
 
 function isoDaysAgo(days) {
   const d = new Date(Date.now() - days * 86_400_000);
@@ -78,10 +79,7 @@ export default function useSymbolImport({ onComplete } = {}) {
         if (onComplete) {
           onComplete(datasetId, finalStatus.result);
         } else {
-          navigate(
-            `${location.pathname}?dataset=${datasetId}`,
-            { replace: false },
-          );
+          navigate(fingerprintPath(datasetId), { replace: false });
         }
         return datasetId;
       } catch (err) {

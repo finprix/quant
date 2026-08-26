@@ -718,6 +718,8 @@ def get_live_quote(symbol):
         "change": round(change, 4) if change is not None else None,
         "change_percent": round(change / prev * 100, 2)
         if change is not None and prev else None,
+        "volume": int(info.last_volume)
+        if getattr(info, "last_volume", None) else None,
         "currency": str(getattr(info, "currency", "") or ""),
         "source": "yahoo",
         "as_of": _time.strftime("%Y-%m-%dT%H:%M:%SZ", _time.gmtime()),
@@ -827,6 +829,18 @@ def list_market_universe():
         except database.DatabaseError:
             regime_label = None
 
+        evidence_bias = None
+        evidence_generated_at = None
+        try:
+            stored_evidence = database.get_latest_intelligence_evidence(
+                dataset["id"]
+            )
+            if stored_evidence:
+                evidence_bias = stored_evidence["bias_score"]
+                evidence_generated_at = stored_evidence["generated_at"]
+        except database.DatabaseError:
+            pass
+
         universe.append(
             {
                 "dataset_id": dataset["id"],
@@ -842,6 +856,8 @@ def list_market_universe():
                 "drawdown": drawdown,
                 "momentum_60d": momentum_60d,
                 "regime_label": regime_label,
+                "evidence_bias": evidence_bias,
+                "evidence_generated_at": evidence_generated_at,
                 "source": source,
             }
         )

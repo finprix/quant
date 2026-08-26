@@ -1,6 +1,6 @@
 import { useDatasets } from "../context/DatasetContext.jsx";
 import { useApiData } from "../hooks/useApiData.js";
-import { SectionHeader, TerminalPanel } from "../components/common/Panels.jsx";
+import { TerminalPanel } from "../components/common/Panels.jsx";
 import { StatusBadge } from "../components/common/StatusBadge.jsx";
 import {
   LoadingState,
@@ -95,16 +95,15 @@ const HEADLINE = [
 ];
 
 export default function FingerprintPage() {
-  const { activeId, activeDataset } = useDatasets();
+  const { activeId } = useDatasets();
   const query = useApiData(activeId ? `/datasets/${activeId}/fingerprint` : null);
 
   if (!activeId) {
     return (
-      <div className="page">
-        <SectionHeader
-          title="Statistical Fingerprint"
-          desc="The statistical DNA of the selected market."
-        />
+      <div className="analysis-view">
+        <div className="view-head">
+          <span className="view-title mono">STATISTICAL FINGERPRINT</span>
+        </div>
         <NoDatasetState />
       </div>
     );
@@ -112,8 +111,10 @@ export default function FingerprintPage() {
 
   if (query.loading && !query.data) {
     return (
-      <div className="page">
-        <SectionHeader title="Statistical Fingerprint" />
+      <div className="analysis-view">
+        <div className="view-head">
+          <span className="view-title mono">STATISTICAL FINGERPRINT</span>
+        </div>
         <LoadingState label="COMPUTING FINGERPRINT" />
       </div>
     );
@@ -121,8 +122,10 @@ export default function FingerprintPage() {
 
   if (query.error && !query.data) {
     return (
-      <div className="page">
-        <SectionHeader title="Statistical Fingerprint" />
+      <div className="analysis-view">
+        <div className="view-head">
+          <span className="view-title mono">STATISTICAL FINGERPRINT</span>
+        </div>
         <ErrorState
           message={query.error.message}
           status={query.error.status}
@@ -135,17 +138,15 @@ export default function FingerprintPage() {
   const fp = query.data?.fingerprint ?? {};
 
   return (
-    <div className="page">
-      <SectionHeader
-        title="Statistical Fingerprint"
-        desc={`Behavioural DNA of ${activeDataset?.filename ?? "dataset"} across its full history.`}
-        right={
-          <>
-            <StatusBadge>{`${query.data?.samples_used ?? fp.sample_count ?? "?"} SAMPLES`}</StatusBadge>
-            {query.data?.cached ? <StatusBadge tone="neutral">CACHED</StatusBadge> : null}
-          </>
-        }
-      />
+    <div className="analysis-view">
+      <div className="view-head">
+        <span className="view-title mono">STATISTICAL FINGERPRINT</span>
+        <span className="view-desc fineprint">Behavioural DNA across the full history.</span>
+        <span className="view-badges">
+          <StatusBadge>{`${query.data?.samples_used ?? fp.sample_count ?? "?"} SAMPLES`}</StatusBadge>
+          {query.data?.cached ? <StatusBadge tone="neutral">CACHED</StatusBadge> : null}
+        </span>
+      </div>
 
       <div className="metric-strip">
         {HEADLINE.map(({ key, label, fmt }) => (

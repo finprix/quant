@@ -1,7 +1,7 @@
 import { useMemo, useState } from "react";
 import { useDatasets } from "../context/DatasetContext.jsx";
 import { useApiData } from "../hooks/useApiData.js";
-import { SectionHeader, TerminalPanel } from "../components/common/Panels.jsx";
+import { TerminalPanel } from "../components/common/Panels.jsx";
 import MetricStrip from "../components/common/MetricStrip.jsx";
 import { StatusBadge } from "../components/common/StatusBadge.jsx";
 import {
@@ -125,7 +125,7 @@ function buildOverlay(rows, match, lookback) {
 }
 
 export default function AnaloguesPage() {
-  const { activeId, activeDataset } = useDatasets();
+  const { activeId } = useDatasets();
   const [lookback, setLookback] = useState(60);
   const [topN, setTopN] = useState(8);
   const [selectedRank, setSelectedRank] = useState(null);
@@ -159,8 +159,10 @@ export default function AnaloguesPage() {
 
   if (!activeId) {
     return (
-      <div className="page">
-        <SectionHeader title="Historical Analogues" />
+      <div className="analysis-view">
+        <div className="view-head">
+          <span className="view-title mono">HISTORICAL ANALOGUES</span>
+        </div>
         <NoDatasetState />
       </div>
     );
@@ -169,39 +171,39 @@ export default function AnaloguesPage() {
   const loading = query.loading && !query.data;
 
   return (
-    <div className="page">
-      <SectionHeader
-        title="Historical Analogues"
-        desc="Find periods whose statistical DNA most closely resembles the present."
-        right={
-          <>
-            <span className="ctx-label">Lookback</span>
-            <div className="chip-row">
-              {LOOKBACKS.map((lb) => (
-                <button
-                  key={lb}
-                  type="button"
-                  className={`chip-btn${lb === lookback ? " active" : ""}`}
-                  onClick={() => setLookback(lb)}
-                >
-                  {lb}D
-                </button>
-              ))}
-            </div>
-            <span className="ctx-label">Top</span>
-            <select
-              className="control"
-              style={{ width: 70 }}
-              value={topN}
-              onChange={(e) => setTopN(Number(e.target.value))}
-            >
-              {[5, 8, 12, 15].map((n) => (
-                <option key={n} value={n}>{n}</option>
-              ))}
-            </select>
-          </>
-        }
-      />
+    <div className="analysis-view">
+      <div className="view-head">
+        <span className="view-title mono">HISTORICAL ANALOGUES</span>
+        <span className="view-desc fineprint">
+          Periods whose statistical DNA most closely resembles the present.
+        </span>
+        <span className="view-badges">
+          <span className="ctx-label">Lookback</span>
+          <div className="chip-row">
+            {LOOKBACKS.map((lb) => (
+              <button
+                key={lb}
+                type="button"
+                className={`chip-btn${lb === lookback ? " active" : ""}`}
+                onClick={() => setLookback(lb)}
+              >
+                {lb}D
+              </button>
+            ))}
+          </div>
+          <span className="ctx-label">Top</span>
+          <select
+            className="control"
+            style={{ width: 70 }}
+            value={topN}
+            onChange={(e) => setTopN(Number(e.target.value))}
+          >
+            {[5, 8, 12, 15].map((n) => (
+              <option key={n} value={n}>{n}</option>
+            ))}
+          </select>
+        </span>
+      </div>
 
       {loading ? (
         <LoadingState label="SCANNING HISTORY" />

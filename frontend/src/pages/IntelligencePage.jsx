@@ -1,6 +1,6 @@
 import { useDatasets } from "../context/DatasetContext.jsx";
 import { useApiData } from "../hooks/useApiData.js";
-import { SectionHeader, TerminalPanel } from "../components/common/Panels.jsx";
+import { TerminalPanel } from "../components/common/Panels.jsx";
 import MetricStrip from "../components/common/MetricStrip.jsx";
 import { StatusBadge, RegimeBadge } from "../components/common/StatusBadge.jsx";
 import { PercentileBar } from "../components/common/PercentileBar.jsx";
@@ -56,13 +56,15 @@ function EvidenceContribution({ label, score, weight }) {
 }
 
 export default function IntelligencePage() {
-  const { activeId, activeDataset } = useDatasets();
+  const { activeId } = useDatasets();
   const query = useApiData(activeId ? `/datasets/${activeId}/intelligence` : null);
 
   if (!activeId) {
     return (
-      <div className="page">
-        <SectionHeader title="Market Intelligence" />
+      <div className="analysis-view">
+        <div className="view-head">
+          <span className="view-title mono">MARKET INTELLIGENCE</span>
+        </div>
         <NoDatasetState />
       </div>
     );
@@ -70,8 +72,10 @@ export default function IntelligencePage() {
 
   if (query.loading && !query.data) {
     return (
-      <div className="page">
-        <SectionHeader title="Market Intelligence" />
+      <div className="analysis-view">
+        <div className="view-head">
+          <span className="view-title mono">MARKET INTELLIGENCE</span>
+        </div>
         <LoadingState label="FUSING EVIDENCE STREAMS" />
       </div>
     );
@@ -79,8 +83,10 @@ export default function IntelligencePage() {
 
   if (query.error && !query.data) {
     return (
-      <div className="page">
-        <SectionHeader title="Market Intelligence" />
+      <div className="analysis-view">
+        <div className="view-head">
+          <span className="view-title mono">MARKET INTELLIGENCE</span>
+        </div>
         <ErrorState
           title="INTELLIGENCE UNAVAILABLE"
           message={query.error.message}
@@ -106,21 +112,21 @@ export default function IntelligencePage() {
     sc.risk_level === "high" ? "down" : sc.risk_level === "low" ? "up" : "warn";
 
   return (
-    <div className="page">
-      <SectionHeader
-        title="Market Intelligence"
-        desc={`Evidence fusion across trend, analogue, regime and risk streams for ${activeDataset?.filename ?? "dataset"}.`}
-        right={
-          <>
-            <StatusBadge tone={biasTone}>
-              BIAS {ev.bias_score >= 0 ? "+" : ""}
-              {(ev.bias_score ?? 0).toFixed(2)}
-            </StatusBadge>
-            <StatusBadge tone={riskTone}>RISK {(sc.risk_level ?? "?").toUpperCase()}</StatusBadge>
-            <StatusBadge tone="neutral">CONF {formatConfidence(sc.confidence)}</StatusBadge>
-          </>
-        }
-      />
+    <div className="analysis-view">
+      <div className="view-head">
+        <span className="view-title mono">MARKET INTELLIGENCE</span>
+        <span className="view-desc fineprint">
+          Evidence fusion across trend, analogue, regime and risk streams.
+        </span>
+        <span className="view-badges">
+          <StatusBadge tone={biasTone}>
+            BIAS {ev.bias_score >= 0 ? "+" : ""}
+            {(ev.bias_score ?? 0).toFixed(2)}
+          </StatusBadge>
+          <StatusBadge tone={riskTone}>RISK {(sc.risk_level ?? "?").toUpperCase()}</StatusBadge>
+          <StatusBadge tone="neutral">CONF {formatConfidence(sc.confidence)}</StatusBadge>
+        </span>
+      </div>
 
       {/* CURRENT STATE */}
       <TerminalPanel title="Current State" subtitle={`As of ${cs.latest_date ?? "—"} · close ${formatPrice(cs.latest_close)}`}>

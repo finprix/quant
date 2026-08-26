@@ -1,20 +1,19 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Link } from "react-router-dom";
+import { useState } from "react";
+import { Link, useNavigate } from "react-router-dom";
 import {
   addToWatchlist,
-  getWatchlist,
   removeFromWatchlist,
 } from "../api/watchlist.js";
-import { useDatasets } from "../context/DatasetContext.jsx";
 import { useAuth } from "../context/AuthContext.jsx";
 import { TerminalPanel, SectionHeader } from "../components/common/Panels.jsx";
 import StatusBadge from "../components/common/StatusBadge.jsx";
 import { LoadingState } from "../components/states/States.jsx";
 import MoversCard from "../components/common/MoversCard.jsx";
+import NewsPanel from "../components/market/NewsPanel.jsx";
 import useSymbolImport from "../hooks/useSymbolImport.js";
-import { useNavigate } from "react-router-dom";
-import { request } from "../api/client.js";
-import { formatSignedPercent } from "../lib/format.js";
+import useWatchlistData from "../hooks/useWatchlistData.js";
+import { analysisPath } from "../lib/navigation.js";
+import { formatRelativeTime } from "../lib/format.js";
 
 const REFRESH_MS = 60_000;
 
@@ -23,95 +22,74 @@ function pctClass(value) {
   return value >= 0 ? "pos" : "neg";
 }
 
+function compactVolume(value) {
+  if (value == null) return "—";
+  if (value >= 1e9) return `${(value / 1e9).toFixed(1)}B`;
+  if (value >= 1e6) return `${(value / 1e6).toFixed(1)}M`;
+  if (value >= 1e3) return `${(value / 1e3).toFixed(1)}K`;
+  return String(value);
+}
+
+/**
+ * MARKETS — discovery only (v0.19.0 ownership model).
+ * Find something interesting here; understand it in /analysis/*.
+ */
 export default function MarketsPage() {
   const { isDeveloper } = useAuth();
-const navigate = useNavigate();
-const [launchingSym, setLaunchingSym] = useState(null);
-const { launch, phase, stage } = useSymbolImport({
-  onComplete: (datasetId) => navigate(`/fingerprint?dataset=${datasetId}`),
-});
-const importing = phase === "importing";
-  const { datasets } = useDatasets();
-  const [data, setData] = useState(null);
-  const [error, setError] = useState(null);
+  const navigate = useNavigate();
+  const [launchingSym, setLaunchingSym] = useState(null);
+  const { launch, phase, stage } = useSymbolImport({
+    onComplete: (datasetId) => navigate(analysisPath("fingerprint", datasetId)),
+  });
+  const importing = phase === "importing";
+
+  const { rows, gainers, losers, error, updatedAt, reload } =
+    useWatchlistData({ pollMs: REFRESH_MS });
+
   const [draft, setDraft] = useState("");
   const [busy, setBusy] = useState(false);
-  const [updatedAt, setUpdatedAt] = useState(null);
-  const timerRef = useRef(null);
-
-  const load = useCallback(async () => {
-    try {
-      const payload = await getWatchlist();
-      // Merge stored dataset ids by symbol so rows can deep-link into the
-      // existing quant analysis pages.
-      const bySymbol = new Map(
-        (payload.symbols || []).map((row) => [row.symbol, row]),
-      );
-      for (const d of datasets) {
-        const source = d.filename?.match(/^([A-Z0-9.\-^=]+)_/i);
-        if (!source) continue;
-        const sym = source[1].toUpperCase();
-        const row = bySymbol.get(sym);
-        if (row && row.quote && row.quote.dataset_id == null) {
-          row.quote.dataset_id = d.id;
-        }
-      }
-      setData(payload);
-      setError(null);
-      setUpdatedAt(new Date());
-    } catch (err) {
-      setError(err.message || String(err));
-    }
-  }, [datasets]);
-
-  useEffect(() => {
-    load();
-    timerRef.current = setInterval(load, REFRESH_MS);
-    return () => clearInterval(timerRef.current);
-  }, [load]);
+  const [actionError, setActionError] = useState(null);
 
   const add = async (event) => {
     event.preventDefault();
     const symbol = draft.trim().toUpperCase();
     if (!symbol || busy) return;
     setBusy(true);
+    setActionError(null);
     try {
       await addToWatchlist(symbol);
       setDraft("");
-      await load();
+      await reload();
     } catch (err) {
-      setError(err.message || String(err));
+      setActionError(err.message || String(err));
     } finally {
       setBusy(false);
     }
   };
 
-  const remove = useCallback(
-    async (symbol) => {
-      if (busy) return;
-      setBusy(true);
-      try {
-        await removeFromWatchlist(symbol);
-        await load();
-      } catch (err) {
-        setError(err.message || String(err));
-      } finally {
-        setBusy(false);
-      }
-    },
-    [busy, load],
-  );
+  const remove = async (symbol) => {
+    if (busy) return;
+    setBusy(true);
+    setActionError(null);
+    try {
+      await removeFromWatchlist(symbol);
+      await reload();
+    } catch (err) {
+      setActionError(err.message || String(err));
+    } finally {
+      setBusy(false);
+    }
+  };
 
-  const movers = useMemo(() => {
-    if (!data) return { gainers: [], losers: [] };
-    return { gainers: data.gainers || [], losers: data.losers || [] };
-  }, [data]);
+  const openAnalysis = (row) => {
+    if (row.stored) navigate(analysisPath("fingerprint", row.stored.id));
+  };
 
   return (
     <div className="page">
       <SectionHeader
         title="Markets"
-        desc="Tracked symbols with live quotes — click a tracked instrument to open its quant analysis."
+        desc="Discovery: track symbols, watch live quotes and movers, then jump into the analysis workspace."
         right={
           updatedAt ? (
             <StatusBadge tone="up">
@@ -138,10 +116,16 @@ const importing = phase === "importing";
         </>
       ) : null}
 
+      {actionError ? (
+        <TerminalPanel title="ACTION FAILED" className="">
+          <p className="error-text">{actionError}</p>
+        </TerminalPanel>
+      ) : null}
+
       <div className="grid-side" style={{ alignItems: "start", marginBottom: 14 }}>
         <div style={{ display: "flex", gap: 12 }}>
-          <MoversCard title="TOP GAINERS" rows={movers.gainers} />
-          <MoversCard title="TOP LOSERS" rows={movers.losers} />
+          <MoversCard title="TOP GAINERS" rows={gainers} />
+          <MoversCard title="TOP LOSERS" rows={losers} />
         </div>
 
         <TerminalPanel title="TRACK A SYMBOL" flush>
@@ -172,16 +156,12 @@ const importing = phase === "importing";
 
       <TerminalPanel
         title="WATCHLIST"
-        subtitle={
-          data
-            ? `${(data.symbols || []).length} tracked symbol(s)`
-            : undefined
-        }
+        subtitle={rows ? `${rows.length} tracked symbol(s)` : undefined}
         flush
       >
-        {!data ? (
+        {!rows ? (
           <LoadingState label="FETCHING QUOTES" />
-        ) : (data.symbols || []).length === 0 ? (
+        ) : rows.length === 0 ? (
           <p className="fineprint">
             Nothing tracked yet{isDeveloper ? " — add a symbol above." : "."}
           </p>
@@ -192,50 +172,64 @@ const importing = phase === "importing";
                 <tr>
                   <th>SYMBOL</th>
                   <th className="num">PRICE</th>
-                  <th className="num">CHANGE</th>
-                  <th className="num">CHANGE %</th>
-                  <th className="num">PREV CLOSE</th>
-                  <th>AS OF</th>
+                  <th className="num">1D %</th>
+                  <th className="num">VOLUME</th>
+                  <th>STORED</th>
+                  <th>LAST ANALYSIS</th>
                   <th />
                 </tr>
               </thead>
               <tbody>
-                {(data.symbols || []).map(({ symbol, quote, quote_error }) => {
-                  const dataset = datasets.find(
-                    (d) =>
-                      quote &&
-                      quote.dataset_id != null &&
-                      d.id === Number(quote.dataset_id),
-                  );
+                {rows.map((row) => {
+                  const { symbol, quote, quote_error, stored } = row;
                   return (
                     <tr key={symbol}>
-                      <td className="mono">{symbol}</td>
+                      <td className="mono">
+                        <button
+                          type="button"
+                          className={`link-btn${stored ? "" : " muted"}`}
+                          onClick={() => openAnalysis(row)}
+                          disabled={!stored}
+                          title={
+                            stored
+                              ? `Open ${symbol} in the analysis workspace`
+                              : "Import history to enable analysis"
+                          }
+                        >
+                          {symbol}
+                        </button>
+                      </td>
                       {quote_error ? (
-                        <td colSpan={5}>
-                          <span className="error-text">
-                            Live market data temporarily unavailable.
-                          </span>
-                        </td>
+                        <>
+                          <td colSpan={3}>
+                            <span className="error-text">
+                              Live market data temporarily unavailable.
+                            </span>
+                          </td>
+                          <td>—</td>
+                        </>
                       ) : (
                         <>
                           <td className="mono num">{quote.price}</td>
-                          <td className={`mono num ${pctClass(quote.change)}`}>
-                            {quote.change ?? "—"}
-                          </td>
                           <td className={`mono num ${pctClass(quote.change_percent)}`}>
                             {quote.change_percent != null
                               ? `${quote.change_percent > 0 ? "+" : ""}${quote.change_percent}%`
                               : "—"}
                           </td>
-                          <td className="mono num">{quote.previous_close ?? "—"}</td>
-                          <td className="mono fineprint">{quote.as_of}</td>
+                          <td className="mono num">{compactVolume(quote.volume)}</td>
                         </>
                       )}
+                      <td className="mono fineprint">
+                        {stored ? `#${stored.id} · ${stored.row_count?.toLocaleString()}r` : "—"}
+                      </td>
+                      <td className="fineprint">
+                        {row.last_analysis_ts ? formatRelativeTime(row.last_analysis_ts) : "—"}
+                      </td>
                       <td className="num">
-                        {dataset ? (
+                        {stored ? (
                           <Link
                             className="chip-btn"
-                            to={`/fingerprint?dataset=${dataset.id}`}
+                            to={analysisPath("fingerprint", stored.id)}
                           >
                             ANALYZE
                           </Link>
@@ -276,7 +270,7 @@ const importing = phase === "importing";
       </TerminalPanel>
 
       <div className="grid-side">
-        <HeadlinesPanel symbols={(data?.symbols || []).map((s) => s.symbol)} />
+        <NewsPanel symbols={(rows || []).map((r) => r.symbol)} />
         <TerminalPanel title="ABOUT LIVE DATA" flush>
           <p className="fineprint" style={{ padding: "12px 14px" }}>
             Quotes refresh every 60 seconds through a cached provider layer.
@@ -287,85 +281,5 @@ const importing = phase === "importing";
         </TerminalPanel>
       </div>
     </div>
-  );
-}
-
-function HeadlinesPanel({ symbols }) {
-  const [symbolIndex, setSymbolIndex] = useState(0);
-  const [items, setItems] = useState(null);
-  const [error, setError] = useState(null);
-
-  const symbol = symbols[symbolIndex];
-
-  useEffect(() => {
-    setItems(null);
-    setError(null);
-    if (!symbol) return undefined;
-    let alive = true;
-    request(`/market/news/${encodeURIComponent(symbol)}`)
-      .then((payload) => alive && setItems(payload.items || []))
-      .catch((err) => alive && setError(err.message || String(err)));
-    return () => {
-      alive = false;
-    };
-  }, [symbol]);
-
-  if (!symbols.length) {
-    return (
-      <TerminalPanel title="HEADLINES" flush>
-        <p className="fineprint" style={{ padding: "12px 14px" }}>
-          Track a symbol to see its recent public headlines.
-        </p>
-      </TerminalPanel>
-    );
-  }
-
-  return (
-    <TerminalPanel
-      title={`HEADLINES — ${symbol}`}
-      flush
-      actions={
-        symbols.length > 1 ? (
-          <button
-            type="button"
-            className="chip-btn"
-            onClick={() =>
-              setSymbolIndex((i) => (i + 1) % Math.max(1, symbols.length))
-            }
-          >
-            NEXT SYMBOL
-          </button>
-        ) : null
-      }
-    >
-      {error ? (
-        <p className="error-text" style={{ padding: "12px 14px" }}>
-          {error}
-        </p>
-      ) : items == null ? (
-        <LoadingState label="LOADING HEADLINES" />
-      ) : items.length === 0 ? (
-        <p className="fineprint" style={{ padding: "12px 14px" }}>
-          No recent headlines.
-        </p>
-      ) : (
-        <div className="news-list">
-          {items.map((item) => (
-            <a
-              key={item.link || item.title}
-              className="news-item"
-              href={item.link || "#"}
-              target="_blank"
-              rel="noreferrer noopener"
-            >
-              <span className="news-title">{item.title}</span>
-              <span className="news-meta mono fineprint">
-                {item.publisher || "provider"} · {item.published ?? ""}
-              </span>
-            </a>
-          ))}
-        </div>
-      )}
-    </TerminalPanel>
   );
 }

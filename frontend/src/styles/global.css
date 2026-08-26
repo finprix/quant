@@ -2352,3 +2352,186 @@ button.db-constraint.link:hover .mono {
 .news-item:hover .news-title { color: var(--accent); }
 .news-title { font-size: 12px; line-height: 1.4; }
 .news-meta { letter-spacing: 0.04em; }
+
+/* ===== v0.19.0 — product shell: analysis workspace + command center ===== */
+
+/* Analysis view (page content inside the shared shell) */
+.analysis-view {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.view-head {
+  align-items: baseline;
+  border-bottom: 1px solid var(--border);
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  padding-bottom: 8px;
+}
+.view-title {
+  color: var(--text);
+  font-size: 13px;
+  letter-spacing: 0.18em;
+}
+.view-desc { flex-basis: 100%; }
+.view-badges {
+  align-items: center;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin-left: auto;
+}
+
+/* Asset context bar inside the analysis shell */
+.asset-bar {
+  background: var(--bg-2);
+  border-bottom: 1px solid var(--border-strong);
+  padding: 10px 18px 12px;
+}
+.asset-bar-top {
+  align-items: center;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 16px;
+  justify-content: space-between;
+}
+.asset-ident {
+  align-items: baseline;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+.asset-symbol {
+  color: var(--accent);
+  font-family: var(--font-display);
+  font-size: 20px;
+  font-weight: 700;
+  letter-spacing: 0.1em;
+}
+.asset-meta {
+  color: var(--muted);
+  font-size: 11px;
+}
+.live-quote {
+  align-items: baseline;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+.quote-price {
+  font-family: var(--font-mono, monospace);
+  font-size: 17px;
+  font-weight: 600;
+}
+.quote-change {
+  font-size: 11px;
+  letter-spacing: 0.06em;
+}
+.quote-change.pos { color: var(--pos); }
+.quote-change.neg { color: var(--neg); }
+.asset-bar-select {
+  align-items: center;
+  display: flex;
+  gap: 10px;
+}
+
+/* Tab strip of the analysis workspace */
+.analysis-tabs {
+  border-bottom: 1px solid var(--border-strong);
+  display: flex;
+  gap: 4px;
+  overflow-x: auto;
+  padding: 0 18px;
+}
+.analysis-tab {
+  background: none;
+  border: none;
+  border-bottom: 2px solid transparent;
+  color: var(--muted);
+  cursor: pointer;
+  font-size: 11px;
+  letter-spacing: 0.12em;
+  margin-bottom: -1px;
+  padding: 9px 12px 7px;
+  text-decoration: none;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+.analysis-tab:hover { color: var(--text); }
+.analysis-tab.active {
+  border-bottom-color: var(--accent);
+  color: var(--accent);
+}
+
+/* Command center */
+.command-center .cc-search .global-search {
+  margin: 0;
+  width: 100%;
+}
+.command-center .cc-search .global-search-input {
+  max-width: none;
+  width: 100%;
+}
+.cc-discover > div:last-child {
+  flex: 1;
+  min-width: 0;
+}
+.cc-discover > div:last-child > * { flex: 1; min-width: 0; }
+.cc-open-row {
+  align-items: center;
+  border-top: 1px solid var(--border);
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  justify-content: space-between;
+  margin-top: 12px;
+  padding-top: 12px;
+}
+.cc-view-links {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.recent-list {
+  display: flex;
+  flex-direction: column;
+}
+.recent-chip {
+  align-items: baseline;
+  border-bottom: 1px solid var(--border);
+  color: var(--text);
+  column-gap: 12px;
+  display: grid;
+  grid-template-columns: 64px 1fr auto;
+  padding: 9px 14px;
+  text-decoration: none;
+}
+.recent-chip:last-child { border-bottom: none; }
+.recent-chip:hover { background: var(--bg-3, rgba(255,255,255,0.04)); }
+.recent-chip:hover .recent-symbol { color: var(--accent); }
+.recent-chip .fineprint:last-child { text-align: right; }
+.recent-symbol {
+  color: var(--text);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+/* Inline action links in tables */
+.link-btn {
+  background: none;
+  border: none;
+  color: var(--accent);
+  cursor: pointer;
+  font: inherit;
+  letter-spacing: inherit;
+  padding: 0;
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+.link-btn:hover { filter: brightness(1.25); }
+
+/* Small +/- ticks reused across quote tables */
+.tick-pct.pos { color: var(--pos); }
+.tick-pct.neg { color: var(--neg); }

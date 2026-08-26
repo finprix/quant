@@ -1,9 +1,10 @@
 import { useEffect, useMemo, useState } from "react";
+import { Link } from "react-router-dom";
 import { useDatasets } from "../context/DatasetContext.jsx";
+import { useAuth } from "../context/AuthContext.jsx";
 import { useApiData } from "../hooks/useApiData.js";
 import { SectionHeader, TerminalPanel } from "../components/common/Panels.jsx";
 import MetricStrip from "../components/common/MetricStrip.jsx";
-import { PercentileBar } from "../components/common/PercentileBar.jsx";
 import { RegimeBadge, StatusBadge } from "../components/common/StatusBadge.jsx";
 import {
   LoadingState,
@@ -12,22 +13,26 @@ import {
   NoDatasetState,
 } from "../components/states/States.jsx";
 import { PriceTimeline } from "../components/charts/primitives.jsx";
-import MarketOverviewPanel from "../components/market/MarketOverviewPanel.jsx";
-import OverviewMovers from "../components/market/OverviewMovers.jsx";
-import {
-  buildDerivedFrame,
-  percentileRank,
-} from "../lib/marketMath.js";
+import MoversCard from "../components/common/MoversCard.jsx";
+import NewsPanel from "../components/market/NewsPanel.jsx";
+import GlobalSearch from "../components/layout/GlobalSearch.jsx";
+import useWatchlistData from "../hooks/useWatchlistData.js";
+import useSymbolImport from "../hooks/useSymbolImport.js";
+import { buildDerivedFrame } from "../lib/marketMath.js";
 import {
   formatPrice,
   formatSignedPercent,
   formatPercent,
-  formatConfidence,
+  formatRelativeTime,
 } from "../lib/format.js";
+import {
+  ANALYSIS_VIEWS,
+  analysisPath,
+  fingerprintPath,
+  symbolFromFilename,
+} from "../lib/navigation.js";
 
-const OVERLAY_OPTIONS = [
-  { key: "drawdown", label: "DRAWDOWN" },
-];
+const REFRESH_MS = 60_000;
 
 function toneFromSigned(value) {
   if (value > 0) return "up";
@@ -35,9 +40,23 @@ function toneFromSigned(value) {
   return "";
 }
 
+/**
+ * OVERVIEW — command center (v0.19.0 ownership model).
+ * Answers: what am I tracking, what is happening now, what am I analyzing,
+ * what should I look at next. Summaries only — every block links deeper.
+ */
 export default function Overview() {
-  const { activeId, activeDataset } = useDatasets();
-  const [overlays, setOverlays] = useState({ drawdown: true });
+  const { activeId, activeDataset, recentAnalyses } = useDatasets();
+  const { isDeveloper } = useAuth();
+  const [showDrawdown, setShowDrawdown] = useState(true);
+  const [launchingSym, setLaunchingSym] = useState(null);
+
+  const { rows: watchRows, gainers, losers, error: watchError } =
+    useWatchlistData({ withUniverse: true, pollMs: REFRESH_MS });
+  const { launch, phase: importPhase, stage: importStage } = useSymbolImport({
+    onComplete: (datasetId) => window.location.assign(fingerprintPath(datasetId)),
+  });
+  const importing = importPhase === "importing";
 
   const detailPath = activeId ? `/datasets/${activeId}` : null;
   const summaryPath = activeId
@@ -53,15 +72,13 @@ export default function Overview() {
   const regimeQuery = useApiData(regimePath);
   const pricesQuery = useApiData(pricesPath);
 
-  // Centralized auto-refresh: stored-universe metrics stay current without
-  // any component hitting external providers directly.
   useEffect(() => {
     if (!activeId) return undefined;
     const timer = setInterval(() => {
       detailQuery.refetch();
       summaryQuery.refetch();
       regimeQuery.refetch();
-    }, 60_000);
+    }, REFRESH_MS);
     return () => clearInterval(timer);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activeId]);
@@ -72,53 +89,14 @@ export default function Overview() {
     return buildDerivedFrame(rows);
   }, [pricesQuery.data]);
 
-  if (!activeId) {
-    return (
-      <div className="page">
-        <SectionHeader title="Market Overview" desc="Current statistical state of the selected market." />
-        <NoDatasetState />
-        <OverviewMovers />
-      </div>
-    );
-  }
-
-  const anyLoading =
-    detailQuery.loading ||
-    pricesQuery.loading ||
-    summaryQuery.loading ||
-    regimeQuery.loading;
-
-  if (anyLoading && !detailQuery.data) {
-    return (
-      <div className="page">
-        <SectionHeader title="Market Overview" />
-        <LoadingState label="LOADING MARKET STATE" />
-      </div>
-    );
-  }
-
-  const hardError = detailQuery.error && !detailQuery.data;
-  if (hardError) {
-    return (
-      <div className="page">
-        <SectionHeader title="Market Overview" />
-        <ErrorState
-          message={detailQuery.error.message}
-          status={detailQuery.error.status}
-          onRetry={detailQuery.refetch}
-        />
-      </div>
-    );
-  }
-
   const metrics = detailQuery.data?.metrics ?? {};
   const summary = summaryQuery.data;
-  const scorecard = summary?.scorecard ?? null;
   const regime = regimeQuery.data?.available
     ? regimeQuery.data.current_regime
     : null;
+  const symbol = symbolFromFilename(activeDataset?.filename);
+  const evidenceBias = summary?.evidence?.bias_score ?? null;
 
-  // Derived from genuine price series
   const lastIdx = frame ? frame.dates.length - 1 : -1;
   const ret1d = lastIdx >= 0 ? frame.returns[lastIdx] : null;
   const ret20d = lastIdx >= 0 ? frame.mom20[lastIdx] : null;
@@ -128,194 +106,296 @@ export default function Overview() {
       : metrics.annualized_volatility ?? null;
   const maxDD = metrics.max_drawdown ?? null;
   const currentDD = lastIdx >= 0 ? frame.drawdown[lastIdx] : null;
-  const maGap = lastIdx >= 0 && frame.ma20[lastIdx]
-    ? frame.closes[lastIdx] / frame.ma20[lastIdx] - 1
-    : null;
-
-  const pctTrend = percentileRank(frame ? frame.ma20.map((m, i) =>
-    m ? frame.closes[i] / m - 1 : null) : [], maGap);
-  const pctMomentum = percentileRank(frame ? frame.mom20 : [], ret20d);
-  const pctVol = percentileRank(frame ? frame.vol20 : [], vol20Ann);
-  const pctDD = percentileRank(frame ? frame.drawdown : [], currentDD);
 
   const timelineData = (() => {
     if (!frame) return [];
     return frame.dates.map((date, i) => ({
       date,
       close: frame.closes[i],
-      ...(overlays.drawdown ? { drawdown: Math.round((frame.drawdown[i] ?? 0) * 10000) / 100 } : {}),
+      ...(showDrawdown
+        ? { drawdown: Math.round((frame.drawdown[i] ?? 0) * 10000) / 100 }
+        : {}),
     }));
   })();
 
-  const stripItems = [
-    { label: "Last Close", value: formatPrice(metrics.latest_close) },
-    {
-      label: "1D Return",
-      value: formatSignedPercent(ret1d),
-      tone: toneFromSigned(ret1d),
-    },
-    {
-      label: "20D Return",
-      value: formatSignedPercent(ret20d),
-      tone: toneFromSigned(ret20d),
-    },
-    {
-      label: "Volatility (ann.)",
-      value: vol20Ann != null ? formatPercent(vol20Ann) : "N/A",
-    },
-    {
-      label: "Max Drawdown",
-      value: formatSignedPercent(maxDD),
-      tone: maxDD != null && maxDD < 0 ? "down" : "",
-    },
-    {
-      label: "Trend State",
-      value: (scorecard?.trend_state ?? "N/A").toUpperCase(),
-      tone: scorecard ? undefined : undefined,
-    },
-    {
-      label: "Momentum State",
-      value: (scorecard?.momentum_state ?? "N/A").toUpperCase(),
-    },
-    {
-      label: "Current Regime",
-      value: regime ? `R${String(regime.regime_id + 1).padStart(2, "0")}` : "UNAVAILABLE",
-      tone: "biscuit",
-    },
-    {
-      label: "Intelligence Score",
-      value:
-        summary?.evidence?.bias_score != null
-          ? `${summary.evidence.bias_score >= 0 ? "+" : ""}${summary.evidence.bias_score.toFixed(2)}`
-          : "N/A",
-      tone: toneFromSigned(summary?.evidence?.bias_score ?? 0),
-    },
-  ];
+  const watchSymbols = (watchRows || []).map((r) => r.symbol);
 
   return (
-    <div className="page">
+    <div className="page command-center">
       <SectionHeader
-        title="Market Overview"
-        desc={`Current statistical state of ${activeDataset?.filename ?? "the selected market"}.`}
-        right={<StatusBadge tone="neutral">{`#${activeId} · ${activeDataset?.row_count ?? "?"} ROWS`}</StatusBadge>}
+        title="Command Center"
+        desc="What you are tracking, what is happening now, and where to look next."
+        right={
+          <StatusBadge tone="neutral">{`${
+            activeDataset ? `#${activeId} ACTIVE` : "NO ACTIVE DATASET"
+          }`}</StatusBadge>
+        }
       />
 
-      <MarketOverviewPanel />
-
-      <OverviewMovers />
-
-      <MetricStrip items={stripItems} />
-
-      <div className="grid-side">
+      {/* DISCOVER */}
+      <div className="grid-side cc-discover">
         <TerminalPanel
-          title="Market State"
-          subtitle="Percentile of latest value vs this dataset's own history"
+          title="FIND AN INSTRUMENT"
+          subtitle="Provider search — track it or jump straight into live analysis"
         >
-          <div style={{ display: "flex", flexDirection: "column", gap: 2 }}>
-            <PercentileBar label="TREND" value={pctTrend ?? 0} format={() => (pctTrend == null ? "N/A" : `${Math.round(pctTrend)}%`)} />
-            <PercentileBar label="MOMENTUM 20D" value={pctMomentum ?? 0} format={() => (pctMomentum == null ? "N/A" : `${Math.round(pctMomentum)}%`)} variant="biscuit" />
-            <PercentileBar label="VOLATILITY" value={pctVol ?? 0} format={() => (pctVol == null ? "N/A" : `${Math.round(pctVol)}%`)} />
-            <PercentileBar label="DRAWDOWN DEPTH" value={100 - (pctDD ?? 0)} format={() => (pctDD == null ? "N/A" : `${Math.round(pctDD)}%`)} variant="biscuit" />
-          </div>
-
-          <div style={{ borderTop: "1px solid var(--border)", marginTop: 12, paddingTop: 12, display: "flex", flexDirection: "column", gap: 8 }}>
-            <div className="ctx-item" style={{ border: "none", padding: 0 }}>
-              <span className="ctx-label">Current Regime</span>
-              {regime ? (
-                <RegimeBadge regimeId={regime.regime_id} confidence={regime.confidence} />
-              ) : (
-                <span className="metric-value">UNAVAILABLE</span>
-              )}
-            </div>
-            {regime?.label ? (
-              <div className="disclaimer-text">{regime.label}</div>
-            ) : null}
-            <div className="ctx-item" style={{ border: "none", padding: 0 }}>
-              <span className="ctx-label">Evidence Score</span>
-              <span className="metric-value">
-                {summary?.evidence?.bias_score != null
-                  ? `${summary.evidence.bias_score >= 0 ? "+" : ""}${summary.evidence.bias_score.toFixed(3)}`
-                  : "N/A"}
-              </span>
-            </div>
-            <div className="ctx-item" style={{ border: "none", padding: 0 }}>
-              <span className="ctx-label">Confidence</span>
-              <span className="metric-value biscuit">
-                {formatConfidence(summary?.confidence)}
-              </span>
-            </div>
+          <div className="cc-search">
+            <GlobalSearch />
           </div>
         </TerminalPanel>
-
-        <TerminalPanel
-          title="Price & State Timeline"
-          subtitle={`${activeDataset?.start_date} → ${activeDataset?.end_date}`}
-          actions={
-            <>
-              {OVERLAY_OPTIONS.map((opt) => (
-                <button
-                  key={opt.key}
-                  type="button"
-                  className={`chip-btn${overlays[opt.key] ? " active" : ""}`}
-                  onClick={() =>
-                    setOverlays((prev) => ({ ...prev, [opt.key]: !prev[opt.key] }))
-                  }
-                >
-                  {opt.label}
-                </button>
-              ))}
-            </>
-          }
-        >
-          {timelineData.length > 1 ? (
-            <PriceTimeline data={timelineData} height={320} showDrawdown={overlays.drawdown} />
-          ) : (
-            <EmptyState
-              title="INSUFFICIENT DATA"
-              hint="This analysis requires at least a few observations."
-            />
-          )}
-        </TerminalPanel>
+        <div style={{ display: "flex", gap: 12 }}>
+          <MoversCard title="TOP GAINERS" rows={gainers} />
+          <MoversCard title="TOP LOSERS" rows={losers} />
+        </div>
       </div>
 
-      <TerminalPanel title="Intelligence Summary" subtitle="Generated by the Quant Vector evidence engine">
-        {summaryQuery.error && !summaryQuery.data ? (
-          <ErrorState
-            title="INTELLIGENCE UNAVAILABLE"
-            message={summaryQuery.error.message}
-            status={summaryQuery.error.status}
-            onRetry={summaryQuery.refetch}
-          />
-        ) : !summary ? (
-          <LoadingState label="LOADING INTELLIGENCE" />
+      {/* WATCHLIST */}
+      <TerminalPanel
+        title="WATCHLIST"
+        subtitle={
+          watchError
+            ? "Live quotes unavailable — showing stored context only"
+            : "Regime and evidence come from your stored analyses"
+        }
+        flush
+      >
+        {!watchRows && !watchError ? (
+          <LoadingState label="LOADING WATCHLIST" />
+        ) : !watchRows || watchRows.length === 0 ? (
+          <p className="fineprint" style={{ padding: "12px 14px" }}>
+            Nothing tracked yet — discover instruments in{" "}
+            <Link to="/markets" style={{ color: "var(--accent)" }}>
+              Markets
+            </Link>{" "}
+            or search above.
+          </p>
         ) : (
-          <>
-            <div className="metric-strip" style={{ gridAutoColumns: "minmax(140px, 1fr)", marginBottom: 12 }}>
-              {[
-                ["TREND", (summary.trend_state ?? "—").toUpperCase()],
-                ["MOMENTUM", (scorecard?.momentum_state ?? "—").toUpperCase()],
-                ["VOLATILITY", (summary.volatility_state ?? "—").toUpperCase()],
-                ["REGIME", (summary.current_regime?.label ?? "unavailable").toUpperCase()],
-                ["EVIDENCE", `${summary.evidence?.bias_score >= 0 ? "+" : ""}${summary.evidence?.bias_score?.toFixed(2) ?? "—"}`],
-                ["CONFIDENCE", formatConfidence(summary.confidence)],
-              ].map(([label, value]) => (
-                <div className="metric-tile" key={label}>
-                  <span className="metric-label">{label}</span>
-                  <span className="metric-value" style={{ fontSize: 13 }}>{value}</span>
-                </div>
-              ))}
-            </div>
-            <p style={{ margin: 0, fontSize: 13, lineHeight: 1.6, color: "var(--text)" }}>
-              {summary.summary ?? "No narrative available."}
-            </p>
-            {Array.isArray(summary.disclaimers) && summary.disclaimers.length > 0 ? (
-              <div style={{ marginTop: 10 }} className="disclaimer-text">
-                {summary.disclaimers[0]}
-              </div>
-            ) : null}
-          </>
+          <div className="table-scroll">
+            <table className="dna-table watch-table">
+              <thead>
+                <tr>
+                  <th>SYMBOL</th>
+                  <th className="num">PRICE</th>
+                  <th className="num">CHANGE %</th>
+                  <th>REGIME</th>
+                  <th className="num">EVIDENCE</th>
+                  <th className="num">STORED</th>
+                  <th />
+                </tr>
+              </thead>
+              <tbody>
+                {watchRows.map((row) => (
+                  <tr key={row.symbol}>
+                    <td className="mono">{row.symbol}</td>
+                    {row.quote_error ? (
+                      <>
+                        <td colSpan={2}>
+                          <span className="error-text">
+                            quote unavailable
+                          </span>
+                        </td>
+                        <td>{row.regime_label ?? "—"}</td>
+                      </>
+                    ) : (
+                      <>
+                        <td className="mono num">{row.quote.price}</td>
+                        <td
+                          className={`mono num ${
+                            row.quote.change_percent >= 0 ? "pos" : "neg"
+                          }`}
+                        >
+                          {row.quote.change_percent != null
+                            ? `${row.quote.change_percent > 0 ? "+" : ""}${row.quote.change_percent}%`
+                            : "—"}
+                        </td>
+                        <td>{row.regime_label ?? "—"}</td>
+                      </>
+                    )}
+                    <td
+                      className={`mono num ${toneFromSigned(row.evidence_bias)}`}
+                    >
+                      {row.evidence_bias != null
+                        ? `${row.evidence_bias >= 0 ? "+" : ""}${row.evidence_bias.toFixed(2)}`
+                        : "—"}
+                    </td>
+                    <td className="mono fineprint">
+                      {row.stored ? `#${row.stored.id}` : "—"}
+                    </td>
+                    <td className="num">
+                      {row.stored ? (
+                        <Link
+                          className="chip-btn"
+                          to={fingerprintPath(row.stored.id)}
+                        >
+                          ANALYZE
+                        </Link>
+                      ) : isDeveloper ? (
+                        <button
+                          type="button"
+                          className="chip-btn"
+                          disabled={importing}
+                          onClick={() => {
+                            setLaunchingSym(row.symbol);
+                            launch(row.symbol);
+                          }}
+                        >
+                          {importing && launchingSym === row.symbol
+                            ? importStage || "IMPORTING…"
+                            : "IMPORT"}
+                        </button>
+                      ) : null}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
         )}
       </TerminalPanel>
+
+      {/* CURRENT ANALYSIS */}
+      {activeId && activeDataset ? (
+        <div className="grid-2 cc-current">
+          <TerminalPanel
+            title={`CURRENT ANALYSIS — ${symbol ?? "#" + activeId}`}
+            subtitle={`${activeDataset.filename} · updated ${formatRelativeTime(
+              activeDataset.end_date,
+            )}`}
+          >
+            {detailQuery.loading && !detailQuery.data ? (
+              <LoadingState label="LOADING MARKET STATE" />
+            ) : detailQuery.error && !detailQuery.data ? (
+              <ErrorState
+                message={detailQuery.error.message}
+                status={detailQuery.error.status}
+                onRetry={detailQuery.refetch}
+              />
+            ) : (
+              <>
+                <MetricStrip
+                  items={[
+                    { label: "Last Close", value: formatPrice(metrics.latest_close) },
+                    { label: "1D Return", value: formatSignedPercent(ret1d), tone: toneFromSigned(ret1d) },
+                    { label: "Momentum 20D", value: formatSignedPercent(ret20d), tone: toneFromSigned(ret20d) },
+                    { label: "Volatility (ann.)", value: vol20Ann != null ? formatPercent(vol20Ann) : "N/A" },
+                    { label: "Max Drawdown", value: formatSignedPercent(maxDD), tone: maxDD != null && maxDD < 0 ? "down" : "" },
+                    { label: "Current Drawdown", value: formatSignedPercent(currentDD), tone: currentDD != null && currentDD < 0 ? "down" : "" },
+                  ]}
+                />
+                <div
+                  style={{
+                    borderTop: "1px solid var(--border)",
+                    marginTop: 10,
+                    paddingTop: 10,
+                    display: "flex",
+                    flexDirection: "column",
+                    gap: 8,
+                  }}
+                >
+                  <div className="ctx-item" style={{ border: "none", padding: 0 }}>
+                    <span className="ctx-label">Current Regime</span>
+                    {regime ? (
+                      <RegimeBadge
+                        regimeId={regime.regime_id}
+                        confidence={regime.confidence}
+                      />
+                    ) : (
+                      <span className="metric-value">UNAVAILABLE</span>
+                    )}
+                  </div>
+                  <div className="ctx-item" style={{ border: "none", padding: 0 }}>
+                    <span className="ctx-label">Evidence Score</span>
+                    <span className={`metric-value mono ${toneFromSigned(evidenceBias)}`}>
+                      {evidenceBias != null
+                        ? `${evidenceBias >= 0 ? "+" : ""}${evidenceBias.toFixed(2)}`
+                        : "N/A"}
+                    </span>
+                  </div>
+                </div>
+                <div className="cc-open-row">
+                  <Link
+                    className="btn accent"
+                    to={fingerprintPath(activeId)}
+                  >
+                    OPEN FULL ANALYSIS →
+                  </Link>
+                  <div className="cc-view-links">
+                    {ANALYSIS_VIEWS.slice(1).map((v) => (
+                      <Link key={v.key} className="chip-btn" to={analysisPath(v.key, activeId)}>
+                        {v.label.toUpperCase()}
+                      </Link>
+                    ))}
+                  </div>
+                </div>
+              </>
+            )}
+          </TerminalPanel>
+
+          <TerminalPanel
+            title="PRICE & STATE"
+            subtitle={`${activeDataset.start_date} → ${activeDataset.end_date}`}
+            actions={
+              <button
+                type="button"
+                className={`chip-btn${showDrawdown ? " active" : ""}`}
+                onClick={() => setShowDrawdown((v) => !v)}
+              >
+                DRAWDOWN
+              </button>
+            }
+          >
+            {timelineData.length > 1 ? (
+              <PriceTimeline
+                data={timelineData}
+                height={300}
+                showDrawdown={showDrawdown}
+              />
+            ) : pricesQuery.loading ? (
+              <LoadingState label="LOADING PRICES" />
+            ) : (
+              <EmptyState
+                title="INSUFFICIENT DATA"
+                hint="This dataset has too few observations to chart."
+              />
+            )}
+          </TerminalPanel>
+        </div>
+      ) : (
+        <TerminalPanel title="CURRENT ANALYSIS" subtitle="Pick or import a dataset to begin">
+          <NoDatasetState />
+        </TerminalPanel>
+      )}
+
+      {/* NEXT + NEWS */}
+      <div className="grid-side">
+        <TerminalPanel
+          title="RECENT ANALYSES"
+          subtitle="Jump back into something you looked at before"
+        >
+          {recentAnalyses.length === 0 ? (
+            <p className="fineprint">
+              Analyses you open will appear here for one-click access.
+            </p>
+          ) : (
+            <div className="recent-list">
+              {recentAnalyses.map((r) => (
+                <Link
+                  key={r.id}
+                  className="recent-chip"
+                  to={fingerprintPath(r.id)}
+                  title={r.dataset.filename}
+                >
+                  <span className="mono recent-symbol">
+                    {symbolFromFilename(r.dataset.filename) ?? `#${r.id}`}
+                  </span>
+                  <span className="fineprint">{r.dataset.filename}</span>
+                  <span className="fineprint mono">{formatRelativeTime(r.ts)}</span>
+                </Link>
+              ))}
+            </div>
+          )}
+        </TerminalPanel>
+        <NewsPanel symbols={watchSymbols} />
+      </div>
     </div>
   );
 }

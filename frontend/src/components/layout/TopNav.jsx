@@ -3,27 +3,32 @@ import { NavLink, useLocation } from "react-router-dom";
 import { APP_VERSION } from "../../lib/version.js";
 import { useAuth } from "../../context/AuthContext.jsx";
 import { getWatchlist } from "../../api/watchlist.js";
+import { ANALYSIS_VIEWS } from "../../lib/navigation.js";
 import GlobalSearch from "./GlobalSearch.jsx";
 
-// Decluttered: seven top-level entries; related pages grouped in dropdowns.
+// Product hierarchy (v0.19.0): DISCOVER / ANALYZE / RESEARCH / DATA.
 const NAV_GROUPS = [
-  { label: "Overview", to: "/", end: true },
-  { label: "Markets", to: "/markets" },
   {
-    label: "Analysis",
+    label: "DISCOVER",
     children: [
-      { to: "/fingerprint", label: "Fingerprint" },
-      { to: "/analogues", label: "Analogues" },
-      { to: "/regimes", label: "Regimes" },
-      { to: "/intelligence", label: "Intelligence" },
-      { to: "/heatmaps", label: "Heatmaps" },
+      { to: "/", label: "Overview" },
+      { to: "/markets", label: "Markets" },
     ],
   },
-  { label: "Compare", to: "/compare" },
-  { label: "AI", to: "/ai" },
-  { label: "Report", to: "/report" },
   {
-    label: "Data",
+    label: "ANALYZE",
+    children: ANALYSIS_VIEWS.map((v) => ({ to: `/analysis/${v.key}`, label: v.label })),
+  },
+  {
+    label: "RESEARCH",
+    children: [
+      { to: "/compare", label: "Compare" },
+      { to: "/ai", label: "AI Assistant" },
+      { to: "/report", label: "Report" },
+    ],
+  },
+  {
+    label: "DATA",
     children: [
       { to: "/datasets", label: "Datasets" },
       { to: "/database", label: "Database" },

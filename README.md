@@ -213,18 +213,16 @@ python -c "import auth; print(auth.hash_password('YOUR NEW PIN'))"
 1. Upload a CSV on the Datasets page (or use `sample_data/demo_market.csv`),
    **or** click FETCH MARKET DATA to search Yahoo Finance and import an
    instrument end-to-end (search → import with stage progress → dataset ready).
-2. Browse Overview (incl. the multi-asset market heatmap) → Fingerprint →
-   Analogues → Regimes → Intelligence for the active dataset.
-3. Compare two or more datasets on the Compare page (Metrics and Cross-market tabs);
+2. **Overview** (command center): track symbols, view regime + evidence summaries, open any recent analysis.
+3. **Markets**: discover instruments with live quotes, movers, and headlines.
+4. Click ANALYZE to enter the **analysis workspace** (`/analysis/{view}?dataset=N`):
+   Fingerprint → Analogues → Regimes → Intelligence → Heatmaps — all five views share
+   the same asset context bar and dataset selector.
+5. Compare two or more datasets on the Compare page (Metrics and Cross-market tabs);
    save selections as presets.
-4. Ask the AI analyst grounded questions on the AI page.
-5. Export the research report from the Report page (print/PDF, PNG charts, CSV tables).
-6. Inspect the actual Turso / libSQL (MySQL-compatible workflow preserved via SQL) tables on the Database page: live row counts,
-   real stored rows with pagination/filtering/sorting, full schema (primary
-   keys, foreign keys, unique constraints such as the one-row-per-dataset-date
-   protection), per-dataset storage breakdown, data lineage and a manual
-   read-only integrity check. The inspector is strictly read-only and never
-   accepts arbitrary SQL.
+6. Ask the AI analyst grounded questions on the AI page.
+7. Export the research report from the Report page (print/PDF, PNG charts, CSV tables).
+8. Inspect the actual Turso / libSQL tables on the Database page.
 
 Imported instruments remember their source; the UPDATE button fetches only
 newer sessions (healing the boundary bar), reports a real-count receipt
@@ -257,7 +255,7 @@ Date,Open,High,Low,Close,Volume
 | AI (optional) | `GET /ai/status`, `POST /ai/query` |
 | Auth (v0.12.0) | `POST /auth/login`, `POST /auth/logout`, `GET /auth/session` — HTTP-only signed session cookie, backend-verified developer credentials |
 | Watchlist (v0.16.0) | \GET /watchlist\ (quotes merged), \POST /watchlist\ 🔒, \DELETE /watchlist/{symbol}\ 🔒 — tracked symbols persisted in libSQL |
-| Market data | `GET /market/search?q=&provider=`, `POST /market/import` 🔒, `POST /market/import/step` 🔒 (v0.18.0), `GET /market/import/status/{job_id}`, `POST /market/update/{dataset_id}` 🔒, `GET /market/overview` |
+| Market data | `GET /market/search?q=&provider=`, `POST /market/import` 🔒, `POST /market/import/step` 🔒 (v0.18.0), `GET /market/import/status/{job_id}`, `POST /market/update/{dataset_id}` 🔒, `GET /market/overview`, `GET /market/quote/{symbol}` |
 | Database inspector (read-only) | `GET /database/status`, `GET /database/stats`, `GET /database/tables`, `GET /database/tables/{table}`, `GET /database/tables/{table}/schema`, `GET /database/datasets/{id}/storage`, `POST /database/integrity` 🔒 |
 | SQL console (v0.12.1, developer) | `POST /database/query` 🔒 — one validated read-only statement per call (`SELECT`/`WITH`/`SHOW`/`DESCRIBE`/`EXPLAIN`); session is `READ ONLY` server-side, mutations rejected 422, max 500 rows |
 

@@ -999,6 +999,44 @@ def intelligence_param_hash(parameters):
     return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
 
 
+def get_latest_intelligence_evidence(dataset_id):
+    """Return the freshest stored evidence bias for one dataset.
+
+    Reads only the newest snapshot whose market date matches the dataset's
+    end date (i.e. not stale). Returns {"bias_score", "generated_at"} or
+    None — used by lightweight universe/overview surfaces so the command
+    center never triggers heavy intelligence computation.
+    """
+    with get_cursor(dictionary=True) as cursor:
+        cursor.execute(
+            """
+            SELECT s.created_at AS generated_at, s.intelligence
+            FROM intelligence_snapshots AS s
+            JOIN datasets AS d ON d.id = s.dataset_id
+            WHERE s.dataset_id = %s
+              AND s.latest_market_date = d.end_date
+            ORDER BY s.id DESC
+            LIMIT 1
+            """,
+            (dataset_id,),
+        )
+        row = cursor.fetchone()
+    if row is None or not row["intelligence"]:
+        return None
+    try:
+        payload = json.loads(row["intelligence"])
+    except (TypeError, ValueError):
+        return None
+    evidence = payload.get("evidence") or {}
+    bias = evidence.get("bias_score")
+    if not isinstance(bias, (int, float)):
+        return None
+    return {
+        "bias_score": float(bias),
+        "generated_at": _to_json_value(row["generated_at"]),
+    }
+
+
 def get_cached_intelligence(dataset_id, param_hash):
     """Return a reusable intelligence snapshot for identical parameters."""
     with get_cursor(dictionary=True) as cursor:

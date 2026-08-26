@@ -68,7 +68,7 @@ async def lifespan(_):
     yield
 
 
-app = FastAPI(title="QUANT VECTOR API", version="0.18.0", lifespan=lifespan)
+app = FastAPI(title="QUANT VECTOR API", version="0.19.0", lifespan=lifespan)
 
 _ALLOWED_ORIGINS = [
     origin.strip()

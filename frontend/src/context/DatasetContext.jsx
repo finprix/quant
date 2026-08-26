@@ -10,6 +10,18 @@ import { useSearchParams } from "react-router-dom";
 import { getDatasets, ApiError } from "../api/client.js";
 
 const STORAGE_KEY = "market-dna.active-dataset-id";
+const RECENTS_KEY = "market-dna.recent-analyses";
+const RECENTS_LIMIT = 6;
+
+function loadRecents() {
+  try {
+    const raw = window.localStorage.getItem(RECENTS_KEY);
+    const parsed = raw ? JSON.parse(raw) : [];
+    return Array.isArray(parsed) ? parsed.slice(0, RECENTS_LIMIT) : [];
+  } catch {
+    return [];
+  }
+}
 
 const DatasetContext = createContext(null);
 
@@ -59,6 +71,25 @@ export function DatasetProvider({ children }) {
     }
   }, [searchParams, datasets, datasetsLoading, datasetsError]);
 
+  const [recents, setRecents] = useState(loadRecents);
+
+  // Track recently analyzed datasets for the Overview command center.
+  useEffect(() => {
+    if (activeId === null) return;
+    setRecents((prev) => {
+      const next = [
+        { id: activeId, ts: Date.now() },
+        ...prev.filter((r) => r.id !== activeId),
+      ].slice(0, RECENTS_LIMIT);
+      try {
+        window.localStorage.setItem(RECENTS_KEY, JSON.stringify(next));
+      } catch {
+        /* storage full/blocked — recents are best-effort */
+      }
+      return next;
+    });
+  }, [activeId]);
+
   useEffect(() => {
     if (activeId === null) {
       window.localStorage.removeItem(STORAGE_KEY);
@@ -86,6 +117,17 @@ export function DatasetProvider({ children }) {
     [datasets, activeId],
   );
 
+  const recentAnalyses = useMemo(
+    () =>
+      recents
+        .map((r) => ({
+          ...r,
+          dataset: datasets.find((d) => d.id === r.id) || null,
+        }))
+        .filter((r) => r.dataset),
+    [recents, datasets],
+  );
+
   const value = useMemo(
     () => ({
       datasets,
@@ -95,6 +137,7 @@ export function DatasetProvider({ children }) {
       activeId,
       activeDataset,
       selectDataset,
+      recentAnalyses,
     }),
     [
       datasets,
@@ -104,6 +147,7 @@ export function DatasetProvider({ children }) {
       activeId,
       activeDataset,
       selectDataset,
+      recentAnalyses,
     ],
   );
 
