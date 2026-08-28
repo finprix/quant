@@ -2558,7 +2558,18 @@ a.news-title:hover { text-decoration: underline; }
 /* ---------- top nav: brand + ticker integration ---------------------- */
 .topnav .brand { align-items: center; gap: 10px; }
 .topnav .brand a { text-decoration: none; display: inline-flex; align-items: baseline; }
-.ticker-strip { display: flex; align-items: center; gap: 14px; overflow-x: auto; scrollbar-width: none; }
+.ticker-strip {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  overflow-x: auto;
+  scrollbar-width: none;
+  background: var(--bg-0);
+  border-bottom: 1px solid var(--border);
+  height: 26px;
+  padding: 0 18px;
+  flex-shrink: 0;
+}
 .ticker-strip::-webkit-scrollbar { display: none; }
 .ticker-strip .tick {
   color: var(--text);

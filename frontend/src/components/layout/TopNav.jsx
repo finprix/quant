@@ -109,36 +109,38 @@ function TickerStrip() {
 
 export default function TopNav() {
   return (
-    <header className="topnav">
-      <div className="brand">
-        <NavLink to="/" aria-label="FINPRIX home">
-          <FinprixLogo size="navbar" />
-        </NavLink>
-        <span className="brand-version">v{APP_VERSION}</span>
-      </div>
-      <nav className="topnav-links" aria-label="Primary">
-        {NAV_GROUPS.map((group) => (
-          <NavGroup key={group.label} group={group} />
-        ))}
-        <NavLink
-          to="/news"
-          className={({ isActive }) => `nav-pill${isActive ? " active" : ""}`}
-        >
-          NEWS
-        </NavLink>
-        <NavGroup
-          group={{
-            label: "DATA",
-            children: [
-              { to: "/watchlists", label: "Watchlists" },
-              { to: "/datasets", label: "Datasets" },
-              { to: "/database", label: "Database" },
-            ],
-          }}
-        />
-      </nav>
-      <CommandBar />
+    <>
+      <header className="topnav">
+        <div className="brand">
+          <NavLink to="/" aria-label="FINPRIX home">
+            <FinprixLogo size="navbar" />
+          </NavLink>
+          <span className="brand-version">v{APP_VERSION}</span>
+        </div>
+        <nav className="topnav-links" aria-label="Primary">
+          {NAV_GROUPS.map((group) => (
+            <NavGroup key={group.label} group={group} />
+          ))}
+          <NavLink
+            to="/news"
+            className={({ isActive }) => `nav-pill${isActive ? " active" : ""}`}
+          >
+            NEWS
+          </NavLink>
+          <NavGroup
+            group={{
+              label: "DATA",
+              children: [
+                { to: "/watchlists", label: "Watchlists" },
+                { to: "/datasets", label: "Datasets" },
+                { to: "/database", label: "Database" },
+              ],
+            }}
+          />
+        </nav>
+        <CommandBar />
+      </header>
       <TickerStrip />
-    </header>
+    </>
   );
 }
